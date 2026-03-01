@@ -1,5 +1,8 @@
 import argparse
 import yaml
+from utils.seed import set_seed
+
+set_seed(confif["seed"])
 
 def main(config_path):
     with open(config_path) as f:

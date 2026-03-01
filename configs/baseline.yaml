@@ -1,0 +1,7 @@
+model: baseline
+dataset: SHD
+epochs: 50
+batch_size: 64
+learning_rate: 0.001
+seed: 42
+precision_bits: 32
