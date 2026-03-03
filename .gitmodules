@@ -1,0 +1,3 @@
+[submodule "external_models/Adaptive_axonal_delay"]
+	path = external_models/Adaptive_axonal_delay
+	url = https://github.com/sunpengfei1122/Adaptive_axonal_delay
