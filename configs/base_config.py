@@ -4,7 +4,9 @@ Base benchmark configuration.
 All model-specific configs inherit from BenchmarkBaseConfig.
 Ensures fair comparison: same dataset, same epochs, same seed, same device.
 """
+import os
 
+_RDS_HOME = f"/rds/general/user/{os.environ.get('USER', 'ak2721')}/home"
 
 class BenchmarkBaseConfig:
     """
