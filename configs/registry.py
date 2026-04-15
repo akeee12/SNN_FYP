@@ -17,7 +17,6 @@ from configs.base_config import BenchmarkBaseConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
-# Add a new model by inserting one line here — nothing else needs to change.
 # ─────────────────────────────────────────────────────────────────────────────
 
 MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
