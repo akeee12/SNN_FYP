@@ -13,6 +13,7 @@ Usage:
 from configs.dcls_config import DCLSConfig
 from configs.adaptive_axonal_delay_config import AdaptiveAxonalDelayConfig
 from configs.base_config import BenchmarkBaseConfig
+from configs.axonal_delay_modelPYTORCH_config import AdaptiveAxonalDelayPyTorchConfig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ from configs.base_config import BenchmarkBaseConfig
 MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
     "dcls"                  : DCLSConfig,
     "adaptive_axonal_delay" : AdaptiveAxonalDelayConfig,
+    "aad_pytorch"             : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
 }
 
 

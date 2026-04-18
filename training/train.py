@@ -1,9 +1,23 @@
 # training/train.py
 """
 Unified benchmark training harness.
-Trains both DCLS and AdaptiveAxonalDelay on SHD with identical conditions.
-Measures: training loss/epoch, test accuracy, GPU memory footprint, wall-clock time.
-Outputs: CSV logs + matplotlib plots.
+Trains AdaptiveAxonalDelay (PyTorch) and DCLS on SHD.
+
+Fixes:
+    1. Single shared SHDDataset for both models
+    2. Unified CrossEntropy loss on spike counts for both
+    3. Gradient clipping added to both runners
+    4. Same time binning, same preprocessing for fair comparison
+    5. DCLS input permuted (B,T,700) → (B,700,T)
+    6. DCLS uses cfg.time_steps not int(1000/time_step)
+
+NOTE on loss deviation:
+    AAD paper uses spike-rate MSE loss (target_true=0.8, target_false=0.0)
+    DCLS paper uses CrossEntropy on summed spike counts.
+    For FAIR COMPARISON we use CrossEntropy on summed spike counts
+    for BOTH models. This deviates from AAD original training objective
+    but ensures comparison is not confounded by loss function differences.
+    This deviation is documented and justified in the report.
 """
 
 import os
@@ -13,165 +27,284 @@ import json
 import argparse
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend for HPC
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import h5py
+from torch.utils.data import Dataset, DataLoader
 
-# ── Path setup ───────────────────────────────────────────────────────────────
+# ── Path setup ────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "external_models", "Adaptive_axonal_delay"))
 sys.path.insert(0, os.path.join(ROOT, "model_notebooks", "SNN-delays"))
 
-from configs.model_configs import get_config
+from configs import get_config, list_models
 from utils.seed import set_seed
 from experiments.results_logger import ResultsLogger
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED DATASET
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SHDDataset(Dataset):
+    """
+    Spiking Heidelberg Digits — single shared loader for ALL models.
+    Reads directly from HDF5 on RDS.
+
+    Returns:
+        spikes : (time_steps, n_inputs) dense float32 tensor
+        label  : int class index 0-19
+
+    Guarantees identical preprocessing for fair model comparison:
+        - Same time binning
+        - Same normalisation (none — binary spikes)
+        - Same max_time = 1.4s
+        - Same n_inputs = 700
+    """
+
+    def __init__(
+        self,
+        path      : str,
+        split     : str   = "train",
+        time_steps: int   = 400,
+        n_inputs  : int   = 700,
+        max_time  : float = 1.4,
+    ):
+        self.time_steps = time_steps
+        self.n_inputs   = n_inputs
+        self.max_time   = max_time
+
+        hdf5_path = os.path.join(path, f"shd_{split}.h5")
+        print(f"  Loading SHD {split} from {hdf5_path}")
+
+        with h5py.File(hdf5_path, "r") as f:
+            self.labels      = f["labels"][:]
+            self.spike_times = [f["spikes"]["times"][i]
+                                for i in range(len(self.labels))]
+            self.spike_units = [f["spikes"]["units"][i]
+                                for i in range(len(self.labels))]
+
+        print(f"  {split}: {len(self.labels)} samples, "
+              f"{len(set(self.labels))} classes")
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        times = self.spike_times[idx]
+        units = self.spike_units[idx]
+        label = int(self.labels[idx])
+
+        t_idx = np.floor(
+            times / self.max_time * self.time_steps
+        ).astype(int)
+        t_idx = np.clip(t_idx, 0, self.time_steps - 1)
+        u_idx = np.clip(units.astype(int), 0, self.n_inputs - 1)
+
+        spikes = torch.zeros(
+            self.time_steps, self.n_inputs, dtype=torch.float32)
+        spikes[t_idx, u_idx] = 1.0
+
+        return spikes, label
+
+
+def get_loaders(cfg, time_steps: int) -> tuple:
+    """
+    Single shared loader used by BOTH models.
+    Ensures identical data pipeline for fair comparison.
+    """
+    train_loader = DataLoader(
+        SHDDataset(
+            path       = cfg.datasets_path,
+            split      = "train",
+            time_steps = time_steps,
+            n_inputs   = 700,
+        ),
+        batch_size  = cfg.batch_size,
+        shuffle     = True,
+        num_workers = cfg.num_workers,
+        pin_memory  = True,
+    )
+    test_loader = DataLoader(
+        SHDDataset(
+            path       = cfg.datasets_path,
+            split      = "test",
+            time_steps = time_steps,
+            n_inputs   = 700,
+        ),
+        batch_size  = cfg.batch_size,
+        shuffle     = False,
+        num_workers = cfg.num_workers,
+        pin_memory  = True,
+    )
+    return train_loader, test_loader
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MEMORY UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_model_memory_mb(model: torch.nn.Module) -> float:
-    """
-    Returns the static parameter memory footprint of a model in MB.
-    Formula: sum of (numel * bytes_per_element) for all parameters.
-    """
-    total_bytes = sum(
+def get_param_memory_mb(model: nn.Module) -> float:
+    return sum(
         p.numel() * p.element_size()
         for p in model.parameters()
-    )
-    return total_bytes / (1024 ** 2)
+    ) / (1024 ** 2)
 
 
-def get_gpu_peak_memory_mb() -> float:
-    """Returns peak GPU memory allocated (MB) since last reset."""
+def get_peak_gpu_memory_mb() -> float:
     if torch.cuda.is_available():
         return torch.cuda.max_memory_allocated() / (1024 ** 2)
     return 0.0
 
 
-def reset_gpu_memory_stats():
+def reset_gpu_memory():
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DCLS MODEL RUNNER
+# UNIFIED LOSS + PREDICTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_dcls(cfg, logger: ResultsLogger):
+def unified_loss(output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
-    Trains the DCLS/SNN-delays model using its native main.py logic,
-    wrapped to capture per-epoch metrics.
+    Unified CrossEntropy loss on summed spike counts.
+    Used identically by both AAD and DCLS.
+
+    Args:
+        output : (B, n_classes, T) or (B, n_classes)
+        labels : (B,)
+    """
+    if output.dim() == 3:
+        logits = output.sum(dim=-1)
+    else:
+        logits = output
+    return F.cross_entropy(logits, labels)
+
+
+def get_predictions(output: torch.Tensor) -> torch.Tensor:
+    """Unified prediction — sums over time if needed then argmax."""
+    if output.dim() == 3:
+        return output.sum(dim=-1).argmax(dim=1)
+    return output.argmax(dim=1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUNNER 1 — ADAPTIVE AXONAL DELAY (PYTORCH)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
+    """
+    Trains AdaptiveAxonalDelayNet (pure PyTorch) on SHD.
+    Uses: NAdam, MultiStepLR, unified CrossEntropy loss,
+          gradient clipping, adaptive delay scheduling.
     """
     print(f"\n{'='*60}")
-    print(f"  Training: {cfg.model_name}")
+    print(f"  Training : {cfg.model_name}")
+    print(f"  Epochs   : {cfg.epochs}")
+    print(f"  Device   : {cfg.device}")
     print(f"{'='*60}")
 
     set_seed(cfg.seed)
+    device = torch.device(
+        cfg.device if torch.cuda.is_available() else "cpu")
+    print(f"  Using device: {device}")
 
-    # Import DCLS internals (from SNN-delays submodule)
-    try:
-        from spikingjelly.activation_based import surrogate
-        import importlib.util, shutil
+    # ── Model ─────────────────────────────────────────────────────────────────
+    from training.models.axonal_delay_model import AdaptiveAxonalDelayNet
+    model     = AdaptiveAxonalDelayNet(cfg).to(device)
+    param_mem = get_param_memory_mb(model)
+    n_params  = sum(p.numel() for p in model.parameters())
+    print(f"  Parameters   : {n_params:,}")
+    print(f"  Param memory : {param_mem:.2f} MB")
 
-        # Dynamically load config into SNN-delays expected format
-        snn_delays_path = os.path.join(ROOT, "model_notebooks", "SNN-delays")
-        spec = importlib.util.spec_from_file_location(
-            "snn_delays_main",
-            os.path.join(snn_delays_path, "main.py")
-        )
-        # We'll use the model and dataset classes directly
-        sys.path.insert(0, snn_delays_path)
-        from model import SNN, SNNDelays
-        from datasets import load_shd_or_ssc
-        from snn_delays import SNNDelaysModel
+    # ── Shared loader ─────────────────────────────────────────────────────────
+    train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
 
-    except ImportError as e:
-        print(f"[DCLS] Import error: {e}")
-        print("  → Make sure SNN-delays submodule is initialised: "
-              "git submodule update --init --recursive")
-        return None
-
-    device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
-
-    # Build model
-    model = SNNDelays(cfg).to(device)
-    param_memory = get_model_memory_mb(model)
-    print(f"  Parameter memory: {param_memory:.2f} MB")
-    print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # Dataset
-    train_loader, test_loader = load_shd_or_ssc(cfg)
-
-    # Optimisers (dual: weights + delay positions)
-    optimizer_w   = torch.optim.Adam(
-        [p for n, p in model.named_parameters() if "pos" not in n],
-        lr=cfg.lr_w, weight_decay=cfg.weight_decay
+    # ── Optimiser ─────────────────────────────────────────────────────────────
+    optimizer = torch.optim.NAdam(
+        model.parameters(),
+        lr=cfg.lr,
     )
-    optimizer_pos = torch.optim.Adam(
-        [p for n, p in model.named_parameters() if "pos" in n],
-        lr=cfg.lr_pos, weight_decay=0
-    )
-    scheduler_w   = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer_w, max_lr=cfg.max_lr_w,
-        epochs=cfg.epochs, steps_per_epoch=len(train_loader)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones = cfg.lr_milestones,
+        gamma      = cfg.lr_gamma,
     )
 
-    loss_fn = torch.nn.CrossEntropyLoss()
+    # ── Adaptive delay state ───────────────────────────────────────────────────
+    thea1        = float(cfg.delay_init_cap)
+    thea2        = float(cfg.delay_init_cap)
+    update_count = 0
 
+    # ── Training loop ─────────────────────────────────────────────────────────
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
     for epoch in range(cfg.epochs):
         model.train()
-        reset_gpu_memory_stats()
-        t_start = time.time()
+        reset_gpu_memory()
+        t_start    = time.time()
         epoch_loss = 0.0
-        correct, total = 0, 0
+        correct    = 0
+        total      = 0
 
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer_w.zero_grad()
-            optimizer_pos.zero_grad()
+        for spikes, labels in train_loader:
+            spikes = spikes.to(device)      # (B, T, 700)
+            labels = labels.to(device)
 
-            outputs = model(inputs)
-
-            if cfg.loss == "sum":
-                loss = loss_fn(outputs.sum(dim=-1), labels)
-            elif cfg.loss == "mean":
-                loss = loss_fn(outputs.mean(dim=-1), labels)
-            else:
-                loss = loss_fn(outputs.max(dim=-1).values, labels)
-
+            optimizer.zero_grad()
+            output = model(spikes)          # (B, 20)
+            loss   = unified_loss(output, labels)
             loss.backward()
-            optimizer_w.step()
-            optimizer_pos.step()
-            scheduler_w.step()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=1.0)
+            optimizer.step()
 
             epoch_loss += loss.item()
-            preds = outputs.sum(dim=-1).argmax(dim=1)
-            correct += (preds == labels).sum().item()
-            total   += labels.size(0)
+            correct    += (get_predictions(output) == labels).sum().item()
+            total      += labels.size(0)
+
+            # ── Adaptive delay clamping ────────────────────────────────────────
+            update_count += 1
+            if epoch <= cfg.delay_adapt_start:
+                model.clamp_delays(thea1, thea2)
+            else:
+                if update_count >= cfg.delay_adapt_window:
+                    stats  = model.get_delay_stats()
+                    p95_d1 = stats["delay1"]["p95"]
+                    p95_d2 = stats["delay2"]["p95"]
+                    if p95_d1 > (thea1 - cfg.delay_expand_margin):
+                        thea1 += 1
+                    if p95_d2 > (thea2 - cfg.delay_expand_margin):
+                        thea2 += 1
+                    model.clamp_delays(thea1, thea2)
+                    update_count = 0
+
+        scheduler.step()
+
+        # ── Evaluation ────────────────────────────────────────────────────────
+        model.eval()
+        test_correct = 0
+        test_total   = 0
+        with torch.no_grad():
+            for spikes, labels in test_loader:
+                spikes = spikes.to(device)
+                labels = labels.to(device)
+                output = model(spikes)
+                test_correct += (
+                    get_predictions(output) == labels).sum().item()
+                test_total += labels.size(0)
 
         t_end      = time.time()
-        peak_mem   = get_gpu_peak_memory_mb()
+        peak_mem   = get_peak_gpu_memory_mb()
         epoch_time = t_end - t_start
         train_acc  = correct / total
+        test_acc   = test_correct / test_total
+        avg_loss   = epoch_loss / len(train_loader)
 
-        # ── Evaluation ──
-        model.eval()
-        test_correct, test_total = 0, 0
-        with torch.no_grad():
-            for inputs, labels in test_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                preds = outputs.sum(dim=-1).argmax(dim=1)
-                test_correct += (preds == labels).sum().item()
-                test_total   += labels.size(0)
-        test_acc = test_correct / test_total
-
-        avg_loss = epoch_loss / len(train_loader)
         train_losses.append(avg_loss)
         test_accs.append(test_acc)
         epoch_times.append(epoch_time)
@@ -182,203 +315,161 @@ def run_dcls(cfg, logger: ResultsLogger):
               f"TrainAcc: {train_acc*100:.2f}% | "
               f"TestAcc: {test_acc*100:.2f}% | "
               f"PeakMem: {peak_mem:.1f}MB | "
-              f"Time: {epoch_time:.1f}s")
+              f"Time: {epoch_time:.1f}s | "
+              f"Delays: [{thea1:.1f}, {thea2:.1f}]")
 
-        logger.log_epoch(cfg.model_name, epoch+1, avg_loss,
-                         train_acc, test_acc, peak_mem, epoch_time)
+        logger.log_epoch(
+            cfg.model_name, epoch + 1, avg_loss,
+            train_acc, test_acc, peak_mem, epoch_time
+        )
+
+        if cfg.save_checkpoints and (epoch + 1) % cfg.checkpoint_every == 0:
+            os.makedirs(cfg.results_dir, exist_ok=True)
+            torch.save({
+                "epoch"      : epoch + 1,
+                "model_state": model.state_dict(),
+                "optimizer"  : optimizer.state_dict(),
+                "test_acc"   : test_acc,
+                "thea1"      : thea1,
+                "thea2"      : thea2,
+            }, os.path.join(
+                cfg.results_dir,
+                f"{cfg.model_name}_epoch{epoch+1}.pt"
+            ))
 
     return {
-        "model_name":    cfg.model_name,
-        "train_losses":  train_losses,
-        "test_accs":     test_accs,
-        "epoch_times":   epoch_times,
-        "peak_mems":     peak_mems,
-        "param_mem_mb":  param_memory,
-        "best_acc":      max(test_accs),
+        "model_name"  : cfg.model_name,
+        "train_losses": train_losses,
+        "test_accs"   : test_accs,
+        "epoch_times" : epoch_times,
+        "peak_mems"   : peak_mems,
+        "param_mem_mb": param_mem,
+        "best_acc"    : max(test_accs),
+        "n_params"    : n_params,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ADAPTIVE AXONAL DELAY MODEL RUNNER
+# RUNNER 2 — DCLS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_adaptive_axonal_delay(cfg, logger: ResultsLogger):
+def run_dcls(cfg, logger: ResultsLogger) -> dict:
     """
-    Trains the Adaptive Axonal Delay model (Sun et al.) on SHD.
-    Wraps the SLAYER-based training loop to capture per-epoch metrics.
+    Trains DCLS/SNN-delays on SHD.
+    Uses: dual Adam optimisers, OneCycleLR, unified CrossEntropy loss,
+          gradient clipping, shared SHDDataset loader.
     """
     print(f"\n{'='*60}")
-    print(f"  Training: {cfg.model_name}")
+    print(f"  Training : {cfg.model_name}")
+    print(f"  Epochs   : {cfg.epochs}")
+    print(f"  Device   : {cfg.device}")
     print(f"{'='*60}")
 
     set_seed(cfg.seed)
+    device = torch.device(
+        cfg.device if torch.cuda.is_available() else "cpu")
+    print(f"  Using device: {device}")
 
+    # ── Import DCLS model from submodule ──────────────────────────────────────
     try:
-        aad_path = os.path.join(ROOT, "external_models", "Adaptive_axonal_delay")
-        sys.path.insert(0, aad_path)
-        import slayerSNN as snn
-        from slayerSNN import spikeLoss
-        from torch.utils.data import DataLoader, Dataset
+        snn_delays_path = os.path.join(
+            ROOT, "model_notebooks", "SNN-delays")
+        sys.path.insert(0, snn_delays_path)
+        from model import SNN, SNNDelays
     except ImportError as e:
-        print(f"[AdaptiveAxonalDelay] Import error: {e}")
-        print("  → Ensure SLAYER is installed: "
-              "https://github.com/bamsumit/slayerPytorch")
+        print(f"[DCLS] Import error: {e}")
+        print("  → pip install spikingjelly --user")
         return None
 
-    device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+    # ── Model ─────────────────────────────────────────────────────────────────
+    model     = SNNDelays(cfg).to(device)
+    param_mem = get_param_memory_mb(model)
+    n_params  = sum(p.numel() for p in model.parameters())
+    print(f"  Parameters   : {n_params:,}")
+    print(f"  Param memory : {param_mem:.2f} MB")
 
-    # ── Dataset ──────────────────────────────────────────────────────────────
-    class SHDDataset(Dataset):
-        def __init__(self, data_path):
-            self.data_path = data_path
-            self.samples   = np.loadtxt(data_path + ".txt").astype("int")
+    # ── Shared loader — same time_steps as AAD ────────────────────────────────
+    train_loader, test_loader = get_loaders(cfg, cfg.time_steps)  # ✅ fixed
 
-        def __len__(self):
-            return self.samples.shape[0]
+    # ── Dual optimisers ───────────────────────────────────────────────────────
+    delay_params  = [p for n, p in model.named_parameters()
+                     if "pos" in n.lower() or "P" in n]
+    weight_params = [p for n, p in model.named_parameters()
+                     if "pos" not in n.lower() and "P" not in n]
 
-        def __getitem__(self, idx):
-            input_idx = self.samples[idx, 0]
-            label     = self.samples[idx, 1]
-            path      = f"{self.data_path}/{input_idx}.npy"
-            spikes    = torch.from_numpy(np.load(path))
-            empty     = torch.zeros((1, 1, cfg.time_steps, cfg.n_inputs))
-            yy        = spikes.transpose(1, 0).nonzero(as_tuple=False)
-            empty[0, 0, yy[:, 0], yy[:, 1]] = 1
-            desired   = torch.zeros((cfg.n_outputs, 1, 1, 1))
-            desired[label, ...] = 1
-            return empty, desired, torch.tensor(label)
+    optimizer_w = torch.optim.Adam(
+        weight_params,
+        lr           = cfg.lr_w,
+        weight_decay = cfg.weight_decay,
+    )
+    optimizer_p = torch.optim.Adam(
+        delay_params,
+        lr           = cfg.lr_pos,
+        weight_decay = 0,
+    )
+    scheduler_w = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer_w,
+        max_lr          = cfg.max_lr_w,
+        epochs          = cfg.epochs,
+        steps_per_epoch = len(train_loader),
+    )
 
-    train_set    = SHDDataset(os.path.join(cfg.datasets_path, "train"))
-    test_set     = SHDDataset(os.path.join(cfg.datasets_path, "test"))
-    train_loader = DataLoader(train_set, batch_size=cfg.batch_size,
-                              shuffle=True,  num_workers=cfg.num_workers)
-    test_loader  = DataLoader(test_set,  batch_size=cfg.batch_size,
-                              shuffle=False, num_workers=cfg.num_workers)
-
-    # ── Network ───────────────────────────────────────────────────────────────
-    class Network(torch.nn.Module):
-        def __init__(self, netParams):
-            super().__init__()
-            slayer    = snn.layer(netParams["neuron"], netParams["simulation"])
-            self.slayer = slayer
-            self.fc1  = torch.nn.utils.weight_norm(
-                slayer.dense(cfg.n_inputs, cfg.n_hidden), name="weight")
-            self.fc2  = torch.nn.utils.weight_norm(
-                slayer.dense(cfg.n_hidden, cfg.n_hidden), name="weight")
-            self.fc3  = torch.nn.utils.weight_norm(
-                slayer.dense(cfg.n_hidden, cfg.n_outputs), name="weight")
-            self.delay1 = slayer.delay(cfg.n_hidden)
-            self.delay2 = slayer.delay(cfg.n_hidden)
-
-        def forward(self, spike):
-            spike = spike.reshape(
-                (spike.shape[0], -1, 1, 1, spike.shape[-1]))
-            spike = self.slayer.spike(self.fc1(self.slayer.psp(spike)))
-            spike = self.delay1(spike)
-            spike = self.slayer.spike(self.fc2(self.slayer.psp(spike)))
-            spike = self.delay2(spike)
-            spike = self.slayer.spike(self.fc3(self.slayer.psp(spike)))
-            return spike
-
-        def clamp_init(self):
-            self.delay1.delay.data.clamp_(0, cfg.delay_init_cap)
-            self.delay2.delay.data.clamp_(0, cfg.delay_init_cap)
-
-        def clamp(self, thea1, thea2):
-            self.delay1.delay.data.clamp_(0, thea1)
-            self.delay2.delay.data.clamp_(0, thea2)
-
-    netParams = {
-        "neuron":     cfg.neuron_params,
-        "simulation": cfg.simulation_params,
-    }
-    net    = Network(netParams).to(device)
-    module = net
-
-    param_memory = get_model_memory_mb(net)
-    print(f"  Parameter memory: {param_memory:.2f} MB")
-    print(f"  Parameters: {sum(p.numel() for p in net.parameters()):,}")
-
-    error     = spikeLoss(netParams).to(device)
-    optimizer = snn.utils.optim.Nadam(net.parameters(), lr=cfg.lr)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=cfg.lr_milestones, gamma=cfg.lr_gamma)
-
-    # Adaptive delay state
-    thea1, thea2   = cfg.delay_init_cap, cfg.delay_init_cap
-    update1, update2 = 0, 0
-
+    # ── Training loop ─────────────────────────────────────────────────────────
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
     for epoch in range(cfg.epochs):
-        net.train()
-        reset_gpu_memory_stats()
-        t_start   = time.time()
+        model.train()
+        reset_gpu_memory()
+        t_start    = time.time()
         epoch_loss = 0.0
-        correct, total = 0, 0
+        correct    = 0
+        total      = 0
 
-        for inputs, targets, labels in train_loader:
-            inputs  = inputs.to(device)
-            targets = targets.to(device)
-            output  = net(inputs)
+        for spikes, labels in train_loader:
+            spikes = spikes.to(device)
+            spikes = spikes.permute(0, 2, 1)    # ✅ (B,T,700) → (B,700,T)
+            labels = labels.to(device)
 
-            correct += torch.sum(
-                snn.predict.getClass(output) == labels).item()
-            total   += len(labels)
+            optimizer_w.zero_grad()
+            optimizer_p.zero_grad()
 
-            loss = error.spikeRate(output, targets)
-            optimizer.zero_grad()
+            output = model(spikes)
+
+            loss = unified_loss(output, labels)
             loss.backward()
-            optimizer.step()
-            epoch_loss += loss.cpu().item()
 
-            # Adaptive delay clamping
-            if epoch <= cfg.delay_adapt_start:
-                module.clamp_init()
-            else:
-                update1 += 1
-                update2 += 1
-                for name, params in net.named_parameters():
-                    if name == "delay1.delay" and update1 > cfg.delay_adapt_window:
-                        sorted1, _ = torch.sort(
-                            torch.floor(params.detach().squeeze()))
-                        thea1 = torch.max(
-                            torch.floor(params.detach().squeeze()))
-                        idx = int(cfg.delay_percentile * len(sorted1))
-                        if sorted1[idx] > (thea1 - cfg.delay_expand_margin):
-                            thea1 += 1
-                        update1 = 0
-                    elif name == "delay2.delay" and update2 > cfg.delay_adapt_window:
-                        sorted2, _ = torch.sort(
-                            torch.floor(params.detach().squeeze()))
-                        thea2 = torch.max(
-                            torch.floor(params.detach().squeeze()))
-                        idx = int(cfg.delay_percentile * len(sorted2))
-                        if sorted2[idx] > (thea2 - cfg.delay_expand_margin):
-                            thea2 += 1
-                        update2 = 0
-                module.clamp(thea1=thea1, thea2=thea2)
+            torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(delay_params,  max_norm=1.0)
 
-        scheduler.step()
+            optimizer_w.step()
+            optimizer_p.step()
+            scheduler_w.step()
+
+            epoch_loss += loss.item()
+            correct    += (get_predictions(output) == labels).sum().item()
+            total      += labels.size(0)
+
+        # ── Evaluation ────────────────────────────────────────────────────────
+        model.eval()
+        test_correct = 0
+        test_total   = 0
+        with torch.no_grad():
+            for spikes, labels in test_loader:
+                spikes = spikes.to(device)
+                spikes = spikes.permute(0, 2, 1)    # ✅ same permute
+                labels = labels.to(device)
+                output = model(spikes)
+                test_correct += (
+                    get_predictions(output) == labels).sum().item()
+                test_total += labels.size(0)
+
         t_end      = time.time()
-        peak_mem   = get_gpu_peak_memory_mb()
+        peak_mem   = get_peak_gpu_memory_mb()
         epoch_time = t_end - t_start
         train_acc  = correct / total
+        test_acc   = test_correct / test_total
+        avg_loss   = epoch_loss / len(train_loader)
 
-        # ── Evaluation ──
-        net.eval()
-        test_correct, test_total = 0, 0
-        with torch.no_grad():
-            for inputs, targets, labels in test_loader:
-                inputs  = inputs.to(device)
-                targets = targets.to(device)
-                output  = net(inputs)
-                test_correct += torch.sum(
-                    snn.predict.getClass(output) == labels).item()
-                test_total   += len(labels)
-        test_acc = test_correct / test_total
-
-        avg_loss = epoch_loss / len(train_loader)
         train_losses.append(avg_loss)
         test_accs.append(test_acc)
         epoch_times.append(epoch_time)
@@ -391,17 +482,33 @@ def run_adaptive_axonal_delay(cfg, logger: ResultsLogger):
               f"PeakMem: {peak_mem:.1f}MB | "
               f"Time: {epoch_time:.1f}s")
 
-        logger.log_epoch(cfg.model_name, epoch+1, avg_loss,
-                         train_acc, test_acc, peak_mem, epoch_time)
+        logger.log_epoch(
+            cfg.model_name, epoch + 1, avg_loss,
+            train_acc, test_acc, peak_mem, epoch_time
+        )
+
+        if cfg.save_checkpoints and (epoch + 1) % cfg.checkpoint_every == 0:
+            os.makedirs(cfg.results_dir, exist_ok=True)
+            torch.save({
+                "epoch"      : epoch + 1,
+                "model_state": model.state_dict(),
+                "optimizer_w": optimizer_w.state_dict(),
+                "optimizer_p": optimizer_p.state_dict(),
+                "test_acc"   : test_acc,
+            }, os.path.join(
+                cfg.results_dir,
+                f"{cfg.model_name}_epoch{epoch+1}.pt"
+            ))
 
     return {
-        "model_name":   cfg.model_name,
+        "model_name"  : cfg.model_name,
         "train_losses": train_losses,
-        "test_accs":    test_accs,
-        "epoch_times":  epoch_times,
-        "peak_mems":    peak_mems,
-        "param_mem_mb": param_memory,
-        "best_acc":     max(test_accs),
+        "test_accs"   : test_accs,
+        "epoch_times" : epoch_times,
+        "peak_mems"   : peak_mems,
+        "param_mem_mb": param_mem,
+        "best_acc"    : max(test_accs),
+        "n_params"    : n_params,
     }
 
 
@@ -410,134 +517,149 @@ def run_adaptive_axonal_delay(cfg, logger: ResultsLogger):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_results(all_results: list, out_dir: str):
-    """
-    Generates three benchmark plots:
-      1. Training Loss vs Epochs
-      2. Test Accuracy vs Peak GPU Memory Footprint
-      3. Test Accuracy vs Cumulative Training Time
-    """
     os.makedirs(out_dir, exist_ok=True)
     colors = ["#2196F3", "#FF5722", "#4CAF50", "#9C27B0"]
 
-    # ── Plot 1: Training Loss vs Epochs ──────────────────────────────────────
+    # ── Plot 1: Training Loss vs Epochs ───────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 6))
     for i, res in enumerate(all_results):
-        ax.plot(range(1, len(res["train_losses"]) + 1),
-                res["train_losses"],
-                label=res["model_name"], color=colors[i], linewidth=2)
+        ax.plot(
+            range(1, len(res["train_losses"]) + 1),
+            res["train_losses"],
+            label=res["model_name"],
+            color=colors[i], linewidth=2,
+        )
     ax.set_xlabel("Epoch", fontsize=13)
     ax.set_ylabel("Training Loss", fontsize=13)
-    ax.set_title("Training Loss vs Epochs — SHD Dataset", fontsize=15)
+    ax.set_title("Training Loss vs Epochs — SHD", fontsize=15)
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "plot_loss_vs_epochs.png"), dpi=150)
     plt.close(fig)
-    print(f"  Saved: plot_loss_vs_epochs.png")
+    print("  Saved: plot_loss_vs_epochs.png")
 
-    # ── Plot 2: Accuracy vs Memory Footprint ─────────────────────────────────
+    # ── Plot 2: Accuracy vs Memory ─────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 6))
     for i, res in enumerate(all_results):
-        best_acc   = res["best_acc"] * 100
-        param_mem  = res["param_mem_mb"]
-        peak_mem   = max(res["peak_mems"])
-        ax.scatter(param_mem, best_acc,
-                   s=200, color=colors[i], zorder=5,
-                   label=f"{res['model_name']} (param)")
-        ax.scatter(peak_mem, best_acc,
-                   s=200, color=colors[i], zorder=5,
-                   marker="^",
-                   label=f"{res['model_name']} (peak GPU)")
-        ax.annotate(res["model_name"],
-                    (param_mem, best_acc),
-                    textcoords="offset points", xytext=(8, 4), fontsize=9)
+        best_acc  = res["best_acc"] * 100
+        param_mem = res["param_mem_mb"]
+        peak_mem  = max(res["peak_mems"])
+        ax.scatter(param_mem, best_acc, s=200,
+                   color=colors[i], zorder=5,
+                   label=f"{res['model_name']} param")
+        ax.scatter(peak_mem, best_acc, s=200,
+                   color=colors[i], zorder=5, marker="^",
+                   label=f"{res['model_name']} peak GPU")
+        ax.annotate(res["model_name"], (param_mem, best_acc),
+                    textcoords="offset points",
+                    xytext=(8, 4), fontsize=9)
     ax.set_xlabel("Memory Footprint (MB)", fontsize=13)
     ax.set_ylabel("Best Test Accuracy (%)", fontsize=13)
-    ax.set_title("Accuracy vs Memory Footprint — SHD Dataset", fontsize=15)
+    ax.set_title("Accuracy vs Memory Footprint — SHD", fontsize=15)
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "plot_acc_vs_memory.png"), dpi=150)
     plt.close(fig)
-    print(f"  Saved: plot_acc_vs_memory.png")
+    print("  Saved: plot_acc_vs_memory.png")
 
-    # ── Plot 3: Accuracy vs Cumulative Training Time ──────────────────────────
+    # ── Plot 3: Accuracy vs Time ───────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 6))
     for i, res in enumerate(all_results):
-        cum_times = np.cumsum(res["epoch_times"]) / 60  # convert to minutes
-        ax.plot(cum_times, [a * 100 for a in res["test_accs"]],
-                label=res["model_name"], color=colors[i], linewidth=2)
+        cum_times = np.cumsum(res["epoch_times"]) / 60
+        ax.plot(cum_times,
+                [a * 100 for a in res["test_accs"]],
+                label=res["model_name"],
+                color=colors[i], linewidth=2)
     ax.set_xlabel("Cumulative Training Time (minutes)", fontsize=13)
     ax.set_ylabel("Test Accuracy (%)", fontsize=13)
-    ax.set_title("Test Accuracy vs Training Time — SHD Dataset", fontsize=15)
+    ax.set_title("Test Accuracy vs Training Time — SHD", fontsize=15)
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "plot_acc_vs_time.png"), dpi=150)
     plt.close(fig)
-    print(f"  Saved: plot_acc_vs_time.png")
+    print("  Saved: plot_acc_vs_time.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN ENTRY POINT
+# MAIN
 # ─────────────────────────────────────────────────────────────────────────────
+
+RUNNERS = {
+    "aad_pytorch" : run_aad_pytorch,
+    "dcls"        : run_dcls,
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Unified SNN Benchmark — SHD Dataset")
+        description="SNN Benchmark — SHD Dataset")
     parser.add_argument(
         "--models", nargs="+",
-        default=["dcls", "adaptive_axonal_delay"],
-        help="Models to benchmark. Options: dcls, adaptive_axonal_delay")
+        default=["aad_pytorch", "dcls"],
+        help=f"Models to run. Available: {list(RUNNERS.keys())}",
+    )
     parser.add_argument(
         "--epochs", type=int, default=None,
-        help="Override number of epochs (default: from config)")
+        help="Override epochs",
+    )
     parser.add_argument(
-        "--results-dir", type=str, default="results",
-        help="Directory to save results and plots")
+        "--results-dir", type=str, default=None,
+        help="Override results directory",
+    )
+    parser.add_argument(
+        "--datasets-path", type=str, default=None,
+        help="Override dataset path",
+    )
     args = parser.parse_args()
 
-    os.makedirs(args.results_dir, exist_ok=True)
-    logger = ResultsLogger(args.results_dir)
+    if args.results_dir:
+        results_dir = args.results_dir
+    else:
+        from configs.base_config import BenchmarkBaseConfig
+        results_dir = BenchmarkBaseConfig.results_dir
+    os.makedirs(results_dir, exist_ok=True)
 
+    logger      = ResultsLogger(results_dir)
     all_results = []
-    runners = {
-        "dcls":                  (run_dcls,                  "DCLSConfig"),
-        "adaptive_axonal_delay": (run_adaptive_axonal_delay, "AdaptiveAxonalDelayConfig"),
-    }
 
     for model_name in args.models:
-        if model_name not in runners:
-            print(f"[WARNING] Unknown model '{model_name}', skipping.")
+        if model_name not in RUNNERS:
+            print(f"[WARNING] Unknown model '{model_name}' — skipping.")
+            print(f"  Available: {list(RUNNERS.keys())}")
             continue
 
         cfg = get_config(model_name)
-        if args.epochs is not None:
-            cfg.epochs = args.epochs
 
-        runner_fn, _ = runners[model_name]
-        result = runner_fn(cfg, logger)
+        if args.epochs        is not None: cfg.epochs        = args.epochs
+        if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
+        if args.results_dir   is not None: cfg.results_dir   = args.results_dir
+
+        result = RUNNERS[model_name](cfg, logger)
 
         if result is not None:
             all_results.append(result)
-            # Save per-model JSON summary
             summary_path = os.path.join(
-                args.results_dir, f"{model_name}_summary.json")
+                results_dir, f"{model_name}_summary.json")
             with open(summary_path, "w") as f:
                 json.dump({
-                    k: (v if not isinstance(v, list) else v)
+                    k: ([float(x) for x in v]
+                        if isinstance(v, list) else v)
                     for k, v in result.items()
                 }, f, indent=2)
-            print(f"\n  ✓ {model_name} best accuracy: {result['best_acc']*100:.2f}%")
+            print(f"\n  ✓ {model_name} best accuracy: "
+                  f"{result['best_acc']*100:.2f}%")
 
     if all_results:
-        print("\n" + "="*60)
-        print("  Generating comparison plots...")
-        plot_results(all_results, args.results_dir)
+        print(f"\n{'='*60}")
+        print("  Generating plots...")
+        plot_results(all_results, results_dir)
         logger.save()
-        print("  All done! Results saved to:", args.results_dir)
+        print(f"  Done. Results at: {results_dir}")
     else:
-        print("[ERROR] No models completed training.")
+        print("[ERROR] No models completed.")
 
 
 if __name__ == "__main__":
