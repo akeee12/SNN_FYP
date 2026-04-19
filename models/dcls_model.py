@@ -230,8 +230,10 @@ class DCLSNet(nn.Module):
         return x
 
     def reset(self):
-        """Reset all LIF neuron states."""
-        functional.reset_net(self)
+     """Reset LIF neuron states directly — avoids infinite recursion."""
+     self.lif1.reset()
+     self.lif2.reset()
+     self.lif_out.reset()
 
 
 def build_dcls_model(cfg) -> DCLSNet:
