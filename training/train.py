@@ -338,8 +338,14 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
     """
     Trains DCLS/SNN-delays on SHD.
     Uses: dual Adam optimisers, OneCycleLR,
-          unified CrossEntropy loss, gradient clipping,
+          NLL loss (output already softmax), gradient clipping,
           shared SHDDataset loader.
+    Fixes:
+        1. Uses model.get_delay_params() / get_weight_params()
+        2. NLL loss — output already has softmax applied
+        3. model.update_sigma() — correct annealing
+        4. model.reset() — LIF state reset
+        5. Sigma printed each epoch
     """
     print(f"\n{'='*60}")
     print(f"  Training : {cfg.model_name}")
@@ -366,11 +372,9 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
     # ── Shared loader — same time_steps as AAD ────────────────────────────────
     train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
 
-    # ── Dual optimisers ───────────────────────────────────────────────────────
-    delay_params  = [p for n, p in model.named_parameters()
-                     if "pos" in n.lower() or "P" in n]
-    weight_params = [p for n, p in model.named_parameters()
-                     if "pos" not in n.lower() and "P" not in n]
+    # ── FIX 1: Use model methods for param separation ─────────────────────────
+    delay_params  = model.get_delay_params()
+    weight_params = model.get_weight_params()
 
     optimizer_w = torch.optim.Adam(
         weight_params,
@@ -388,6 +392,15 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         epochs          = cfg.epochs,
         steps_per_epoch = len(train_loader),
     )
+
+    # ── FIX 2: NLL loss — output already has softmax applied ─────────────────
+    def dcls_loss(output, labels):
+        """
+        NLL loss for DCLS.
+        Output is already softmax probabilities from model.
+        log + NLLLoss = CrossEntropy but avoids double softmax.
+        """
+        return F.nll_loss(torch.log(output + 1e-8), labels)
 
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
@@ -407,8 +420,9 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
             optimizer_w.zero_grad()
             optimizer_p.zero_grad()
 
-            output = model(spikes)
-            loss   = unified_loss(output, labels)
+            model.reset()                        # ✅ reset LIF states
+            output = model(spikes)               # (B, 20) softmax probs
+            loss   = dcls_loss(output, labels)   # ✅ NLL loss
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
@@ -419,9 +433,12 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
             scheduler_w.step()
 
             epoch_loss += loss.item()
-            correct    += (
-                get_predictions(output) == labels).sum().item()
+            preds       = output.argmax(dim=1)   # ✅ direct argmax
+            correct    += (preds == labels).sum().item()
             total      += labels.size(0)
+
+        # ── FIX 3: Sigma annealing via update_sigma() ─────────────────────────
+        sigma = model.update_sigma()
 
         # ── Evaluation ────────────────────────────────────────────────────────
         model.eval()
@@ -432,9 +449,10 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
                 spikes = spikes.to(device)
                 spikes = spikes.permute(0, 2, 1)
                 labels = labels.to(device)
+                model.reset()                    # ✅ reset LIF states
                 output = model(spikes)
-                test_correct += (
-                    get_predictions(output) == labels).sum().item()
+                preds  = output.argmax(dim=1)    # ✅ direct argmax
+                test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
 
         t_end      = time.time()
@@ -454,7 +472,8 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
               f"TrainAcc: {train_acc*100:.2f}% | "
               f"TestAcc: {test_acc*100:.2f}% | "
               f"PeakMem: {peak_mem:.1f}MB | "
-              f"Time: {epoch_time:.1f}s")
+              f"Time: {epoch_time:.1f}s | "
+              f"Sigma: {sigma:.3f}")
 
         logger.log_epoch(
             cfg.model_name, epoch + 1, avg_loss,
@@ -468,6 +487,7 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
                 "optimizer_w": optimizer_w.state_dict(),
                 "optimizer_p": optimizer_p.state_dict(),
                 "test_acc"   : test_acc,
+                "sigma"      : sigma,
             }, os.path.join(
                 cfg.results_dir,
                 f"{cfg.model_name}_epoch{epoch+1}.pt"))
@@ -483,13 +503,11 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         "n_params"    : n_params,
     }
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTTING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_results(all_results: list, out_dir: str):
-    os.makedirs(out_dir, exist_ok=True)
+
     colors = ["#2196F3", "#FF5722", "#4CAF50", "#9C27B0"]
 
     # ── Plot 1: Training Loss vs Epochs ───────────────────────────────────────
