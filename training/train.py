@@ -11,13 +11,11 @@ Fixes:
     5. DCLS input permuted (B,T,700) → (B,700,T)
     6. DCLS uses cfg.time_steps not int(1000/time_step)
 
-NOTE on loss deviation:
-    AAD paper uses spike-rate MSE loss (target_true=0.8, target_false=0.0)
+NOTE on loss:
+    AAD paper uses spike-rate MSE loss.
     DCLS paper uses CrossEntropy on summed spike counts.
-    For FAIR COMPARISON we use CrossEntropy on summed spike counts
-    for BOTH models. This deviates from AAD original training objective
-    but ensures comparison is not confounded by loss function differences.
-    This deviation is documented and justified in the report.
+    We use CrossEntropy for BOTH for fair comparison.
+    Documented deviation — justified in report.
 """
 
 import os
@@ -38,11 +36,21 @@ from torch.utils.data import Dataset, DataLoader
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "model_notebooks", "SNN-delays"))
+sys.path.insert(0, os.path.join(ROOT, "models"))
 
 from configs import get_config, list_models
 from utils.seed import set_seed
 from experiments.results_logger import ResultsLogger
+
+# ── Model imports ─────────────────────────────────────────────────────────────
+from axonal_delay_modelPYTorch import AdaptiveAxonalDelayNet
+
+try:
+    from dcls_model import build_dcls_model
+    DCLS_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] DCLS not available: {e}")
+    DCLS_AVAILABLE = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,13 +60,8 @@ from experiments.results_logger import ResultsLogger
 class SHDDataset(Dataset):
     """
     Spiking Heidelberg Digits — single shared loader for ALL models.
-    Reads directly from HDF5 on RDS.
-
-    Returns:
-        spikes : (time_steps, n_inputs) dense float32 tensor
-        label  : int class index 0-19
-
-    Guarantees identical preprocessing for fair model comparison:
+    Returns: spikes (time_steps, 700) float32, label int
+    Identical preprocessing guarantees fair comparison:
         - Same time binning
         - Same normalisation (none — binary spikes)
         - Same max_time = 1.4s
@@ -112,29 +115,16 @@ class SHDDataset(Dataset):
 
 
 def get_loaders(cfg, time_steps: int) -> tuple:
-    """
-    Single shared loader used by BOTH models.
-    Ensures identical data pipeline for fair comparison.
-    """
+    """Single shared loader for both models."""
     train_loader = DataLoader(
-        SHDDataset(
-            path       = cfg.datasets_path,
-            split      = "train",
-            time_steps = time_steps,
-            n_inputs   = 700,
-        ),
+        SHDDataset(cfg.datasets_path, "train", time_steps),
         batch_size  = cfg.batch_size,
         shuffle     = True,
         num_workers = cfg.num_workers,
         pin_memory  = True,
     )
     test_loader = DataLoader(
-        SHDDataset(
-            path       = cfg.datasets_path,
-            split      = "test",
-            time_steps = time_steps,
-            n_inputs   = 700,
-        ),
+        SHDDataset(cfg.datasets_path, "test", time_steps),
         batch_size  = cfg.batch_size,
         shuffle     = False,
         num_workers = cfg.num_workers,
@@ -171,12 +161,8 @@ def reset_gpu_memory():
 
 def unified_loss(output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
-    Unified CrossEntropy loss on summed spike counts.
-    Used identically by both AAD and DCLS.
-
-    Args:
-        output : (B, n_classes, T) or (B, n_classes)
-        labels : (B,)
+    CrossEntropy on summed spike counts.
+    Used identically by both AAD and DCLS for fair comparison.
     """
     if output.dim() == 3:
         logits = output.sum(dim=-1)
@@ -186,7 +172,7 @@ def unified_loss(output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
 
 
 def get_predictions(output: torch.Tensor) -> torch.Tensor:
-    """Unified prediction — sums over time if needed then argmax."""
+    """Argmax on summed spikes — identical for both models."""
     if output.dim() == 3:
         return output.sum(dim=-1).argmax(dim=1)
     return output.argmax(dim=1)
@@ -214,21 +200,18 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
     print(f"  Using device: {device}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    from training.models.axonal_delay_model import AdaptiveAxonalDelayNet
     model     = AdaptiveAxonalDelayNet(cfg).to(device)
     param_mem = get_param_memory_mb(model)
     n_params  = sum(p.numel() for p in model.parameters())
     print(f"  Parameters   : {n_params:,}")
     print(f"  Param memory : {param_mem:.2f} MB")
 
-    # ── Shared loader ─────────────────────────────────────────────────────────
+    # ── Data ──────────────────────────────────────────────────────────────────
     train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
 
     # ── Optimiser ─────────────────────────────────────────────────────────────
     optimizer = torch.optim.NAdam(
-        model.parameters(),
-        lr=cfg.lr,
-    )
+        model.parameters(), lr=cfg.lr)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
         milestones = cfg.lr_milestones,
@@ -240,7 +223,6 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
     thea2        = float(cfg.delay_init_cap)
     update_count = 0
 
-    # ── Training loop ─────────────────────────────────────────────────────────
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
     for epoch in range(cfg.epochs):
@@ -263,9 +245,10 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
                 model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            epoch_loss += loss.item()
-            correct    += (get_predictions(output) == labels).sum().item()
-            total      += labels.size(0)
+            epoch_loss   += loss.item()
+            correct      += (
+                get_predictions(output) == labels).sum().item()
+            total        += labels.size(0)
 
             # ── Adaptive delay clamping ────────────────────────────────────────
             update_count += 1
@@ -273,12 +256,12 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
                 model.clamp_delays(thea1, thea2)
             else:
                 if update_count >= cfg.delay_adapt_window:
-                    stats  = model.get_delay_stats()
-                    p95_d1 = stats["delay1"]["p95"]
-                    p95_d2 = stats["delay2"]["p95"]
-                    if p95_d1 > (thea1 - cfg.delay_expand_margin):
+                    stats = model.get_delay_stats()
+                    if stats["delay1"]["p95"] > (
+                            thea1 - cfg.delay_expand_margin):
                         thea1 += 1
-                    if p95_d2 > (thea2 - cfg.delay_expand_margin):
+                    if stats["delay2"]["p95"] > (
+                            thea2 - cfg.delay_expand_margin):
                         thea2 += 1
                     model.clamp_delays(thea1, thea2)
                     update_count = 0
@@ -296,7 +279,7 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
                 output = model(spikes)
                 test_correct += (
                     get_predictions(output) == labels).sum().item()
-                test_total += labels.size(0)
+                test_total   += labels.size(0)
 
         t_end      = time.time()
         peak_mem   = get_peak_gpu_memory_mb()
@@ -320,8 +303,7 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
 
         logger.log_epoch(
             cfg.model_name, epoch + 1, avg_loss,
-            train_acc, test_acc, peak_mem, epoch_time
-        )
+            train_acc, test_acc, peak_mem, epoch_time)
 
         if cfg.save_checkpoints and (epoch + 1) % cfg.checkpoint_every == 0:
             os.makedirs(cfg.results_dir, exist_ok=True)
@@ -334,8 +316,7 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
                 "thea2"      : thea2,
             }, os.path.join(
                 cfg.results_dir,
-                f"{cfg.model_name}_epoch{epoch+1}.pt"
-            ))
+                f"{cfg.model_name}_epoch{epoch+1}.pt"))
 
     return {
         "model_name"  : cfg.model_name,
@@ -356,8 +337,9 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
 def run_dcls(cfg, logger: ResultsLogger) -> dict:
     """
     Trains DCLS/SNN-delays on SHD.
-    Uses: dual Adam optimisers, OneCycleLR, unified CrossEntropy loss,
-          gradient clipping, shared SHDDataset loader.
+    Uses: dual Adam optimisers, OneCycleLR,
+          unified CrossEntropy loss, gradient clipping,
+          shared SHDDataset loader.
     """
     print(f"\n{'='*60}")
     print(f"  Training : {cfg.model_name}")
@@ -365,31 +347,24 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
     print(f"  Device   : {cfg.device}")
     print(f"{'='*60}")
 
+    if not DCLS_AVAILABLE:
+        print("[ERROR] DCLS not available — skipping.")
+        return None
+
     set_seed(cfg.seed)
     device = torch.device(
         cfg.device if torch.cuda.is_available() else "cpu")
     print(f"  Using device: {device}")
 
-    # ── Import DCLS model from submodule ──────────────────────────────────────
-    try:
-        snn_delays_path = os.path.join(
-            ROOT, "model_notebooks", "SNN-delays")
-        sys.path.insert(0, snn_delays_path)
-        from model import SNN, SNNDelays
-    except ImportError as e:
-        print(f"[DCLS] Import error: {e}")
-        print("  → pip install spikingjelly --user")
-        return None
-
     # ── Model ─────────────────────────────────────────────────────────────────
-    model     = SNNDelays(cfg).to(device)
+    model     = build_dcls_model(cfg).to(device)
     param_mem = get_param_memory_mb(model)
     n_params  = sum(p.numel() for p in model.parameters())
     print(f"  Parameters   : {n_params:,}")
     print(f"  Param memory : {param_mem:.2f} MB")
 
     # ── Shared loader — same time_steps as AAD ────────────────────────────────
-    train_loader, test_loader = get_loaders(cfg, cfg.time_steps)  # ✅ fixed
+    train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
 
     # ── Dual optimisers ───────────────────────────────────────────────────────
     delay_params  = [p for n, p in model.named_parameters()
@@ -414,7 +389,6 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         steps_per_epoch = len(train_loader),
     )
 
-    # ── Training loop ─────────────────────────────────────────────────────────
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
     for epoch in range(cfg.epochs):
@@ -427,15 +401,14 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
 
         for spikes, labels in train_loader:
             spikes = spikes.to(device)
-            spikes = spikes.permute(0, 2, 1)    # ✅ (B,T,700) → (B,700,T)
+            spikes = spikes.permute(0, 2, 1)    # (B,T,700) → (B,700,T)
             labels = labels.to(device)
 
             optimizer_w.zero_grad()
             optimizer_p.zero_grad()
 
             output = model(spikes)
-
-            loss = unified_loss(output, labels)
+            loss   = unified_loss(output, labels)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
@@ -446,7 +419,8 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
             scheduler_w.step()
 
             epoch_loss += loss.item()
-            correct    += (get_predictions(output) == labels).sum().item()
+            correct    += (
+                get_predictions(output) == labels).sum().item()
             total      += labels.size(0)
 
         # ── Evaluation ────────────────────────────────────────────────────────
@@ -456,12 +430,12 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         with torch.no_grad():
             for spikes, labels in test_loader:
                 spikes = spikes.to(device)
-                spikes = spikes.permute(0, 2, 1)    # ✅ same permute
+                spikes = spikes.permute(0, 2, 1)
                 labels = labels.to(device)
                 output = model(spikes)
                 test_correct += (
                     get_predictions(output) == labels).sum().item()
-                test_total += labels.size(0)
+                test_total   += labels.size(0)
 
         t_end      = time.time()
         peak_mem   = get_peak_gpu_memory_mb()
@@ -484,8 +458,7 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
 
         logger.log_epoch(
             cfg.model_name, epoch + 1, avg_loss,
-            train_acc, test_acc, peak_mem, epoch_time
-        )
+            train_acc, test_acc, peak_mem, epoch_time)
 
         if cfg.save_checkpoints and (epoch + 1) % cfg.checkpoint_every == 0:
             os.makedirs(cfg.results_dir, exist_ok=True)
@@ -497,8 +470,7 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
                 "test_acc"   : test_acc,
             }, os.path.join(
                 cfg.results_dir,
-                f"{cfg.model_name}_epoch{epoch+1}.pt"
-            ))
+                f"{cfg.model_name}_epoch{epoch+1}.pt"))
 
     return {
         "model_name"  : cfg.model_name,
@@ -632,7 +604,6 @@ def main():
             continue
 
         cfg = get_config(model_name)
-
         if args.epochs        is not None: cfg.epochs        = args.epochs
         if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
         if args.results_dir   is not None: cfg.results_dir   = args.results_dir
@@ -641,9 +612,9 @@ def main():
 
         if result is not None:
             all_results.append(result)
-            summary_path = os.path.join(
-                results_dir, f"{model_name}_summary.json")
-            with open(summary_path, "w") as f:
+            with open(os.path.join(
+                    results_dir,
+                    f"{model_name}_summary.json"), "w") as f:
                 json.dump({
                     k: ([float(x) for x in v]
                         if isinstance(v, list) else v)
