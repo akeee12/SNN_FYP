@@ -72,7 +72,7 @@ class AdaptiveAxonalDelayPyTorchConfig(BenchmarkBaseConfig):
     # ─────────────────────────────────────────────────────────────────────────
 
     optimizer      = "nadam"   # torch.optim.NAdam — built into PyTorch 2.x
-    lr             = 0.1
+    lr             = 0.001
     lr_milestones  = [800]     # MultiStepLR decay milestones
     lr_gamma       = 0.5
 

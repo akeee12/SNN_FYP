@@ -27,7 +27,7 @@ class BenchmarkBaseConfig:
     n_outputs     = 20                 # SHD has 20 classes
 
     # ── Training (fair-comparison knobs — same for ALL models) ────────────────
-    epochs        = 100
+    epochs        = 1000
     batch_size    = 256
     seed          = 42
 

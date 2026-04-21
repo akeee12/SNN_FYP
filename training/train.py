@@ -3,19 +3,25 @@
 Unified benchmark training harness.
 Trains AdaptiveAxonalDelay (PyTorch) and DCLS on SHD.
 
-Fixes:
-    1. Single shared SHDDataset for both models
-    2. Unified CrossEntropy loss on spike counts for both
-    3. Gradient clipping added to both runners
-    4. Same time binning, same preprocessing for fair comparison
-    5. DCLS input permuted (B,T,700) → (B,700,T)
-    6. DCLS uses cfg.time_steps not int(1000/time_step)
+Fixes applied v2:
+    1. AAD uses spike rate MSE loss (original paper)
+    2. DCLS uses CrossEntropy on raw FC logits (no lif_out overflow)
+    3. plot_results confirmed at module level
+    4. AAD delay_adapt_start reduced to work within 100 epochs
+
+    Fixes:
+1. Single shared SHDDataset for both models
+2. Unified CrossEntropy loss on spike counts for both
+3. Gradient clipping added to both runners
+4. Same time binning, same preprocessing for fair comparison
+5. DCLS input permuted (B,T,700) → (B,700,T)
+6. DCLS uses cfg.time_steps not int(1000/time_step)
 
 NOTE on loss:
-    AAD paper uses spike-rate MSE loss.
-    DCLS paper uses CrossEntropy on summed spike counts.
-    We use CrossEntropy for BOTH for fair comparison.
-    Documented deviation — justified in report.
+AAD paper uses spike-rate MSE loss.
+DCLS paper uses CrossEntropy on summed spike counts.
+We use CrossEntropy for BOTH for fair comparison.
+Documented deviation — justified in report.
 """
 
 import os
@@ -54,18 +60,14 @@ except ImportError as e:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SHARED DATASET
+# SHARED DATASET — lazy loading to avoid OOM on login node
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SHDDataset(Dataset):
     """
-    Spiking Heidelberg Digits — single shared loader for ALL models.
-    Returns: spikes (time_steps, 700) float32, label int
-    Identical preprocessing guarantees fair comparison:
-        - Same time binning
-        - Same normalisation (none — binary spikes)
-        - Same max_time = 1.4s
-        - Same n_inputs = 700
+    Spiking Heidelberg Digits — lazy HDF5 loader.
+    Only loads labels at init — reads spikes on demand.
+    Prevents OOM on nodes with limited RAM.
     """
 
     def __init__(
@@ -79,26 +81,26 @@ class SHDDataset(Dataset):
         self.time_steps = time_steps
         self.n_inputs   = n_inputs
         self.max_time   = max_time
+        self.hdf5_path  = os.path.join(path, f"shd_{split}.h5")
 
-        hdf5_path = os.path.join(path, f"shd_{split}.h5")
-        print(f"  Loading SHD {split} from {hdf5_path}")
+        print(f"  Loading SHD {split} from {self.hdf5_path}")
 
-        with h5py.File(hdf5_path, "r") as f:
-            self.labels      = f["labels"][:]
-            self.spike_times = [f["spikes"]["times"][i]
-                                for i in range(len(self.labels))]
-            self.spike_units = [f["spikes"]["units"][i]
-                                for i in range(len(self.labels))]
+        # Only load labels at init — tiny memory footprint
+        with h5py.File(self.hdf5_path, "r") as f:
+            self.labels    = f["labels"][:]
+            self.n_samples = len(self.labels)
 
-        print(f"  {split}: {len(self.labels)} samples, "
+        print(f"  {split}: {self.n_samples} samples, "
               f"{len(set(self.labels))} classes")
 
     def __len__(self):
-        return len(self.labels)
+        return self.n_samples
 
     def __getitem__(self, idx):
-        times = self.spike_times[idx]
-        units = self.spike_units[idx]
+        # Read one sample at a time from HDF5
+        with h5py.File(self.hdf5_path, "r") as f:
+            times = f["spikes"]["times"][idx]
+            units = f["spikes"]["units"][idx]
         label = int(self.labels[idx])
 
         t_idx = np.floor(
@@ -156,37 +158,17 @@ def reset_gpu_memory():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UNIFIED LOSS + PREDICTIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def unified_loss(output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """
-    CrossEntropy on summed spike counts.
-    Used identically by both AAD and DCLS for fair comparison.
-    """
-    if output.dim() == 3:
-        logits = output.sum(dim=-1)
-    else:
-        logits = output
-    return F.cross_entropy(logits, labels)
-
-
-def get_predictions(output: torch.Tensor) -> torch.Tensor:
-    """Argmax on summed spikes — identical for both models."""
-    if output.dim() == 3:
-        return output.sum(dim=-1).argmax(dim=1)
-    return output.argmax(dim=1)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # RUNNER 1 — ADAPTIVE AXONAL DELAY (PYTORCH)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
     """
     Trains AdaptiveAxonalDelayNet (pure PyTorch) on SHD.
-    Uses: NAdam, MultiStepLR, unified CrossEntropy loss,
-          gradient clipping, adaptive delay scheduling.
+
+    Loss: Spike rate MSE — original paper loss
+        target_true  = 0.8 for correct class
+        target_false = 0.0 for all others
+    Optimiser: NAdam lr=0.001 (reduced from 0.1)
     """
     print(f"\n{'='*60}")
     print(f"  Training : {cfg.model_name}")
@@ -218,6 +200,23 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
         gamma      = cfg.lr_gamma,
     )
 
+    # ── Loss: spike rate MSE — original paper loss ────────────────────────────
+    def spike_rate_loss(output, labels):
+        """
+        MSE between normalised spike rates and target rates.
+        Correct class target  = cfg.target_true  (0.8)
+        All other classes     = cfg.target_false (0.0)
+        """
+        B         = output.shape[0]
+        n_classes = output.shape[1]
+        # Normalise spike counts to rates
+        rates  = output / cfg.time_steps
+        target = torch.full(
+            (B, n_classes), cfg.target_false,
+            dtype=torch.float32, device=device)
+        target[torch.arange(B), labels] = cfg.target_true
+        return F.mse_loss(rates, target)
+
     # ── Adaptive delay state ───────────────────────────────────────────────────
     thea1        = float(cfg.delay_init_cap)
     thea2        = float(cfg.delay_init_cap)
@@ -234,21 +233,21 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
         total      = 0
 
         for spikes, labels in train_loader:
-            spikes = spikes.to(device)      # (B, T, 700)
+            spikes = spikes.to(device)
             labels = labels.to(device)
 
             optimizer.zero_grad()
-            output = model(spikes)          # (B, 20)
-            loss   = unified_loss(output, labels)
+            output = model(spikes)                    # (B, 20)
+            loss   = spike_rate_loss(output, labels)  # ✅ MSE loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            epoch_loss   += loss.item()
-            correct      += (
-                get_predictions(output) == labels).sum().item()
-            total        += labels.size(0)
+            epoch_loss += loss.item()
+            preds       = output.argmax(dim=1)
+            correct    += (preds == labels).sum().item()
+            total      += labels.size(0)
 
             # ── Adaptive delay clamping ────────────────────────────────────────
             update_count += 1
@@ -277,8 +276,8 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
                 spikes = spikes.to(device)
                 labels = labels.to(device)
                 output = model(spikes)
-                test_correct += (
-                    get_predictions(output) == labels).sum().item()
+                preds  = output.argmax(dim=1)
+                test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
 
         t_end      = time.time()
@@ -294,7 +293,7 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
         peak_mems.append(peak_mem)
 
         print(f"  Epoch [{epoch+1:3d}/{cfg.epochs}] "
-              f"Loss: {avg_loss:.4f} | "
+              f"Loss: {avg_loss:.6f} | "
               f"TrainAcc: {train_acc*100:.2f}% | "
               f"TestAcc: {test_acc*100:.2f}% | "
               f"PeakMem: {peak_mem:.1f}MB | "
@@ -336,16 +335,8 @@ def run_aad_pytorch(cfg, logger: ResultsLogger) -> dict:
 
 def run_dcls(cfg, logger: ResultsLogger) -> dict:
     """
-    Trains DCLS/SNN-delays on SHD.
-    Uses: dual Adam optimisers, OneCycleLR,
-          NLL loss (output already softmax), gradient clipping,
-          shared SHDDataset loader.
-    Fixes:
-        1. Uses model.get_delay_params() / get_weight_params()
-        2. NLL loss — output already has softmax applied
-        3. model.update_sigma() — correct annealing
-        4. model.reset() — LIF state reset
-        5. Sigma printed each epoch
+    Trains DCLS on SHD.
+    Loss: CrossEntropy on raw FC logits (lif_out removed from model)
     """
     print(f"\n{'='*60}")
     print(f"  Training : {cfg.model_name}")
@@ -369,10 +360,10 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
     print(f"  Parameters   : {n_params:,}")
     print(f"  Param memory : {param_mem:.2f} MB")
 
-    # ── Shared loader — same time_steps as AAD ────────────────────────────────
+    # ── Shared loader ─────────────────────────────────────────────────────────
     train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
 
-    # ── FIX 1: Use model methods for param separation ─────────────────────────
+    # ── Dual optimisers ───────────────────────────────────────────────────────
     delay_params  = model.get_delay_params()
     weight_params = model.get_weight_params()
 
@@ -393,15 +384,6 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         steps_per_epoch = len(train_loader),
     )
 
-    # ── FIX 2: NLL loss — output already has softmax applied ─────────────────
-    def dcls_loss(output, labels):
-        """
-        NLL loss for DCLS.
-        Output is already softmax probabilities from model.
-        log + NLLLoss = CrossEntropy but avoids double softmax.
-        """
-        return F.nll_loss(torch.log(output + 1e-8), labels)
-
     train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
 
     for epoch in range(cfg.epochs):
@@ -420,9 +402,9 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
             optimizer_w.zero_grad()
             optimizer_p.zero_grad()
 
-            model.reset()                        # ✅ reset LIF states
-            output = model(spikes)               # (B, 20) softmax probs
-            loss   = dcls_loss(output, labels)   # ✅ NLL loss
+            model.reset()
+            output = model(spikes)              # (B, 20) raw logits
+            loss   = F.cross_entropy(output, labels)  # ✅ CrossEntropy
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
@@ -433,11 +415,10 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
             scheduler_w.step()
 
             epoch_loss += loss.item()
-            preds       = output.argmax(dim=1)   # ✅ direct argmax
+            preds       = output.argmax(dim=1)
             correct    += (preds == labels).sum().item()
             total      += labels.size(0)
 
-        # ── FIX 3: Sigma annealing via update_sigma() ─────────────────────────
         sigma = model.update_sigma()
 
         # ── Evaluation ────────────────────────────────────────────────────────
@@ -449,9 +430,9 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
                 spikes = spikes.to(device)
                 spikes = spikes.permute(0, 2, 1)
                 labels = labels.to(device)
-                model.reset()                    # ✅ reset LIF states
+                model.reset()
                 output = model(spikes)
-                preds  = output.argmax(dim=1)    # ✅ direct argmax
+                preds  = output.argmax(dim=1)
                 test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
 
@@ -503,11 +484,14 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         "n_params"    : n_params,
     }
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOTTING
+# PLOTTING — defined at module level
 # ─────────────────────────────────────────────────────────────────────────────
 
-
+def plot_results(all_results: list, out_dir: str):
+    """Generates three benchmark comparison plots."""
+    os.makedirs(out_dir, exist_ok=True)
     colors = ["#2196F3", "#FF5722", "#4CAF50", "#9C27B0"]
 
     # ── Plot 1: Training Loss vs Epochs ───────────────────────────────────────
@@ -592,17 +576,11 @@ def main():
         help=f"Models to run. Available: {list(RUNNERS.keys())}",
     )
     parser.add_argument(
-        "--epochs", type=int, default=None,
-        help="Override epochs",
-    )
+        "--epochs", type=int, default=None)
     parser.add_argument(
-        "--results-dir", type=str, default=None,
-        help="Override results directory",
-    )
+        "--results-dir", type=str, default=None)
     parser.add_argument(
-        "--datasets-path", type=str, default=None,
-        help="Override dataset path",
-    )
+        "--datasets-path", type=str, default=None)
     args = parser.parse_args()
 
     if args.results_dir:

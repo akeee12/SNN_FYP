@@ -183,12 +183,6 @@ class DCLSNet(nn.Module):
                 if id(p) not in delay_ids]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, 700, T) — after permute in train.py
-        Returns:
-            out: (B, 20) — sum of softmax over membrane potentials
-        """
         B, C, T = x.shape
 
         # ── Input binning: 700 → 140 ──────────────────────────────────────────
@@ -197,37 +191,39 @@ class DCLSNet(nn.Module):
 
         # ── FC input projection ───────────────────────────────────────────────
         x = self.fc_in(
-            x.permute(0, 2, 1)                      # (B, T, 140)
-        ).permute(0, 2, 1)                          # (B, 256, T)
+            x.permute(0, 2, 1)).permute(0, 2, 1)   # (B, 256, T)
 
         # ── DCLS layer 1 ──────────────────────────────────────────────────────
         x = self.dcls1(x)                           # (B, 256, T)
-        # LIF in multi-step mode expects (T, B, N)
         x = self.lif1(x.permute(2, 0, 1))          # (T, B, 256)
         x = x.permute(1, 2, 0)                     # (B, 256, T)
-        # BN after LIF — matches repo
-        x = self.bn1(x)                             # (B, 256, T)
-        x = self.drop1(x)                           # (B, 256, T)
+        x = self.bn1(x)
+        x = self.drop1(x)
 
         # ── DCLS layer 2 ──────────────────────────────────────────────────────
         x = self.dcls2(x)                           # (B, 256, T)
         x = self.lif2(x.permute(2, 0, 1))          # (T, B, 256)
         x = x.permute(1, 2, 0)                     # (B, 256, T)
-        x = self.bn2(x)                             # (B, 256, T)
-        x = self.drop2(x)                           # (B, 256, T)
+        x = self.bn2(x)
+        x = self.drop2(x)
 
-        # ── Readout — FIX: fc_out applied ONCE ───────────────────────────────
+        # ── Readout — Option A: keep lif_out, fix overflow ────────────────────
         x = x.permute(0, 2, 1)                     # (B, T, 256)
         x = self.fc_out(x)                          # (B, T, 20)
 
-        # Infinite threshold LIF — membrane potential = logits
+        # lif_out in multi-step mode expects (T, B, 20)
         x = self.lif_out(x.permute(1, 0, 2))       # (T, B, 20)
 
-        # Softmax over classes at each timestep then sum over T
+        # FIX: clamp membrane potential before softmax to prevent overflow
+        x = x.clamp(-10, 10)                        # ← prevents NaN/overflow
+
+        # Softmax over classes at each timestep
         x = F.softmax(x, dim=-1)                   # (T, B, 20)
+
+        # Sum over time → (B, 20)
         x = x.sum(dim=0)                            # (B, 20)
 
-        return x
+        return x                                    # softmax probabilities
 
     def reset(self):
      """Reset LIF neuron states directly — avoids infinite recursion."""
