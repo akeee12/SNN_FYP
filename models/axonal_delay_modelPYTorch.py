@@ -168,7 +168,6 @@ class PSPKernel(nn.Module):
         self.kernel_size = kernel_size
         t      = torch.arange(kernel_size, dtype=torch.float32)
         kernel = torch.exp(-t / tau_s)
-        kernel = kernel / (kernel.sum() + 1e-8)
         self.register_buffer("kernel", kernel.flip(0).view(1, 1, -1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
