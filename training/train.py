@@ -404,7 +404,16 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
 
             model.reset()
             output = model(spikes)              # (B, 20) raw logits
-            loss   = F.cross_entropy(output, labels)  # ✅ CrossEntropy
+            
+# output is softmax probabilities from lif_out
+# CrossEntropy applies softmax AGAIN internally
+# → double softmax → garbage gradients
+
+# Fix:
+            def dcls_loss(output, labels):
+                return F.nll_loss(torch.log(output.clamp(min=1e-8)), labels)
+
+            loss = dcls_loss(output, labels)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)

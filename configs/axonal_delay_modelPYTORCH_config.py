@@ -33,7 +33,7 @@ class AdaptiveAxonalDelayPyTorchConfig(BenchmarkBaseConfig):
 
     tau_s       = 1.0          # synaptic response time constant
     tau_r       = 1.0          # refractory time constant
-    theta_u     = 10.0         # firing threshold
+    theta_u     = 0.5         # firing threshold
     alpha_r     = 2.0          # refractory scale
 
     # ─────────────────────────────────────────────────────────────────────────

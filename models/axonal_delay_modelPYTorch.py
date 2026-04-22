@@ -188,7 +188,7 @@ class RefractoryKernel(nn.Module):
     Subtracts from membrane potential after each spike.
     """
 
-    def __init__(self, tau_r=1.0, theta_u=10.0,
+    def __init__(self, tau_r=1.0, theta_u=0.5,
                  alpha_r=2.0, kernel_size=32):
         super().__init__()
         self.kernel_size = kernel_size
@@ -215,7 +215,7 @@ class SRMLayer(nn.Module):
         spike(t) = Heaviside(u(t) - theta_u)  [SLAYER surrogate in backward]
     """
 
-    def __init__(self, tau_s=1.0, tau_r=1.0, theta_u=10.0,
+    def __init__(self, tau_s=1.0, tau_r=1.0, theta_u=0.5,
                  alpha_r=2.0, tau_rho=1.0, scale_rho=1.0,
                  kernel_size=32):
         super().__init__()
