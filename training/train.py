@@ -410,12 +410,7 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
 # → double softmax → garbage gradients
 
 # Fix:
-            def dcls_loss(output, labels):
-                return F.nll_loss(torch.log(output.clamp(min=1e-8)), labels)
-
-            loss = dcls_loss(output, labels)
-            loss.backward()
-
+            loss = F.cross_entropy(output, labels)   # ✅ raw logits
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(delay_params,  max_norm=1.0)
 

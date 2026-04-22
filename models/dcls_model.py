@@ -207,30 +207,18 @@ class DCLSNet(nn.Module):
         x = self.bn2(x)
         x = self.drop2(x)
 
-        # ── Readout — Option A: keep lif_out, fix overflow ────────────────────
-        x = x.permute(0, 2, 1)                     # (B, T, 256)
-        x = self.fc_out(x)                          # (B, T, 20)
+        # ── Readout — sum spikes over time then FC ────────────────────────────
+        x = x.sum(dim=-1)                           # (B, 256) sum over T
+        x = self.fc_out(x)                          # (B, 20) raw logits
+        return x                                    # use CrossEntropy in train.py                            # (B, 20)
 
-        # lif_out in multi-step mode expects (T, B, 20)
-        x = self.lif_out(x.permute(1, 0, 2))       # (T, B, 20)
-
-        # FIX: clamp membrane potential before softmax to prevent overflow
-        x = x.clamp(-10, 10)                        # ← prevents NaN/overflow
-
-        # Softmax over classes at each timestep
-        x = F.softmax(x, dim=-1)                   # (T, B, 20)
-
-        # Sum over time → (B, 20)
-        x = x.sum(dim=0)                            # (B, 20)
-
-        return x                                    # softmax probabilities
+                                          # softmax probabilities
 
     def reset(self):
         """Reset LIF neuron states directly — avoids infinite recursion."""
         self.lif1.reset()
         self .lif2.reset()
-        self.lif_out.reset()
-
+        
 
 def build_dcls_model(cfg) -> DCLSNet:
     """Factory — builds DCLSNet from cfg."""
