@@ -489,7 +489,180 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
         "n_params"    : n_params,
     }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# RUNNER 3 — AAD WITH LOGARITHMIC SPIKE BUFFER
+# ─────────────────────────────────────────────────────────────────────────────
 
+def run_aad_log_buffer(cfg, logger: ResultsLogger) -> dict:
+    """
+    Trains AAD-SNN with Logarithmic Spike Buffer on SHD.
+
+    Identical training procedure to run_aad_pytorch.
+    Only difference: model has LogSpikeBuffer at input stage.
+    This allows direct ablation comparison:
+        aad_pytorch     → baseline AAD
+        aad_log_buffer  → AAD + log buffer
+    """
+    print(f"\n{'='*60}")
+    print(f"  Training : {cfg.model_name}")
+    print(f"  Epochs   : {cfg.epochs}")
+    print(f"  Device   : {cfg.device}")
+    print(f"  Log taps : {cfg.log_buffer_n_taps}")
+    print(f"  Max delay: {cfg.log_buffer_max_delay}")
+    print(f"{'='*60}")
+
+    set_seed(cfg.seed)
+    device = torch.device(
+        cfg.device if torch.cuda.is_available() else "cpu")
+    print(f"  Using device: {device}")
+
+    # ── Model ─────────────────────────────────────────────────────────────
+    from log_buffer_aad_model import AdaptiveAxonalDelayNetLogBuffer
+    model     = AdaptiveAxonalDelayNetLogBuffer(cfg).to(device)
+    param_mem = get_param_memory_mb(model)
+    n_params  = sum(p.numel() for p in model.parameters())
+
+    # Print buffer info
+    buf_info = model.get_buffer_info()
+    print(f"  Parameters   : {n_params:,}")
+    print(f"  Param memory : {param_mem:.2f} MB")
+    print(f"  Buffer taps  : {buf_info['tap_positions']}")
+    print(f"  Buffer input : {buf_info['input_size']} neurons")
+
+    # ── Data ──────────────────────────────────────────────────────────────
+    train_loader, test_loader = get_loaders(cfg, cfg.time_steps)
+
+    # ── Optimiser ─────────────────────────────────────────────────────────
+    optimizer = torch.optim.NAdam(model.parameters(), lr=cfg.lr)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones = cfg.lr_milestones,
+        gamma      = cfg.lr_gamma,
+    )
+
+    # ── Loss: spike rate MSE ───────────────────────────────────────────────
+    def spike_rate_loss(output, labels):
+        B         = output.shape[0]
+        n_classes = output.shape[1]
+        rates     = output / cfg.time_steps
+        target    = torch.full(
+            (B, n_classes), cfg.target_false,
+            dtype=torch.float32, device=device)
+        target[torch.arange(B), labels] = cfg.target_true
+        return F.mse_loss(rates, target)
+
+    # ── Adaptive delay state ───────────────────────────────────────────────
+    thea1        = float(cfg.delay_init_cap)
+    thea2        = float(cfg.delay_init_cap)
+    update_count = 0
+
+    train_losses, test_accs, epoch_times, peak_mems = [], [], [], []
+
+    for epoch in range(cfg.epochs):
+        model.train()
+        reset_gpu_memory()
+        t_start    = time.time()
+        epoch_loss = 0.0
+        correct    = 0
+        total      = 0
+
+        for spikes, labels in train_loader:
+            spikes = spikes.to(device)      # (B, T, 700)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            output = model(spikes)          # (B, 20)
+            loss   = spike_rate_loss(output, labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            preds       = output.argmax(dim=1)
+            correct    += (preds == labels).sum().item()
+            total      += labels.size(0)
+
+            # ── Adaptive delay clamping ────────────────────────────────────
+            update_count += 1
+            if epoch <= cfg.delay_adapt_start:
+                model.clamp_delays(thea1, thea2)
+            else:
+                if update_count >= cfg.delay_adapt_window:
+                    stats = model.get_delay_stats()
+                    if stats["delay1"]["p95"] > (
+                            thea1 - cfg.delay_expand_margin):
+                        thea1 += 1
+                    if stats["delay2"]["p95"] > (
+                            thea2 - cfg.delay_expand_margin):
+                        thea2 += 1
+                    model.clamp_delays(thea1, thea2)
+                    update_count = 0
+
+        scheduler.step()
+
+        # ── Evaluation ────────────────────────────────────────────────────
+        model.eval()
+        test_correct = 0
+        test_total   = 0
+        with torch.no_grad():
+            for spikes, labels in test_loader:
+                spikes = spikes.to(device)
+                labels = labels.to(device)
+                output = model(spikes)
+                preds  = output.argmax(dim=1)
+                test_correct += (preds == labels).sum().item()
+                test_total   += labels.size(0)
+
+        t_end      = time.time()
+        peak_mem   = get_peak_gpu_memory_mb()
+        epoch_time = t_end - t_start
+        train_acc  = correct / total
+        test_acc   = test_correct / test_total
+        avg_loss   = epoch_loss / len(train_loader)
+
+        train_losses.append(avg_loss)
+        test_accs.append(test_acc)
+        epoch_times.append(epoch_time)
+        peak_mems.append(peak_mem)
+
+        print(f"  Epoch [{epoch+1:3d}/{cfg.epochs}] "
+              f"Loss: {avg_loss:.6f} | "
+              f"TrainAcc: {train_acc*100:.2f}% | "
+              f"TestAcc: {test_acc*100:.2f}% | "
+              f"PeakMem: {peak_mem:.1f}MB | "
+              f"Time: {epoch_time:.1f}s | "
+              f"Delays: [{thea1:.1f}, {thea2:.1f}]")
+
+        logger.log_epoch(
+            cfg.model_name, epoch + 1, avg_loss,
+            train_acc, test_acc, peak_mem, epoch_time)
+
+        if cfg.save_checkpoints and (epoch + 1) % cfg.checkpoint_every == 0:
+            os.makedirs(cfg.results_dir, exist_ok=True)
+            torch.save({
+                "epoch"      : epoch + 1,
+                "model_state": model.state_dict(),
+                "optimizer"  : optimizer.state_dict(),
+                "test_acc"   : test_acc,
+                "thea1"      : thea1,
+                "thea2"      : thea2,
+                "tap_positions": model.get_buffer_info()["tap_positions"],
+            }, os.path.join(
+                cfg.results_dir,
+                f"{cfg.model_name}_epoch{epoch+1}.pt"))
+
+    return {
+        "model_name"  : cfg.model_name,
+        "train_losses": train_losses,
+        "test_accs"   : test_accs,
+        "epoch_times" : epoch_times,
+        "peak_mems"   : peak_mems,
+        "param_mem_mb": param_mem,
+        "best_acc"    : max(test_accs),
+        "n_params"    : n_params,
+        "tap_positions": model.get_buffer_info()["tap_positions"],
+    }
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTTING — defined at module level
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,6 +742,8 @@ def plot_results(all_results: list, out_dir: str):
 RUNNERS = {
     "aad_pytorch" : run_aad_pytorch,
     "dcls"        : run_dcls,
+    "aad_log_buffer" : run_aad_log_buffer,
+    
 }
 
 
