@@ -69,7 +69,7 @@ class DCLSConfig(BenchmarkBaseConfig):
     #   'spike_count' → count spikes
     loss             = "sum"
     loss_fn          = "CEloss"
-    v_threshold      = 1.0
+    v_threshold      = 0.1
     output_v_threshold = 1e9           # effectively disables output threshold
     alpha            = 5.0             # surrogate gradient steepness
 
