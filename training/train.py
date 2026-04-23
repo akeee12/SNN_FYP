@@ -411,6 +411,7 @@ def run_dcls(cfg, logger: ResultsLogger) -> dict:
 
 # Fix:
             loss = F.cross_entropy(output, labels)   # ✅ raw logits
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(weight_params, max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(delay_params,  max_norm=1.0)
 

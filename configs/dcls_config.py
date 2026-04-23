@@ -82,7 +82,7 @@ class DCLSConfig(BenchmarkBaseConfig):
     weight_decay        = 1e-5
 
     lr_w                = 1e-3
-    lr_pos              = 100 * lr_w       # delay positions need higher LR
+    lr_pos              = 10 * lr_w       # delay positions need higher LR
 
     # Schedulers
     scheduler_w         = "one_cycle"
