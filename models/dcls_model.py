@@ -208,7 +208,7 @@ class DCLSNet(nn.Module):
         x = self.drop2(x)
 
         # ── Readout — sum spikes over time then FC ────────────────────────────
-        x = x.sum(dim=-1)                           # (B, 256) sum over T
+        x = x.mean(dim=-1)                           # (B, 256) sum over T
         x = self.fc_out(x)                          # (B, 20) raw logits
         return x                                    # use CrossEntropy in train.py                            # (B, 20)
 
