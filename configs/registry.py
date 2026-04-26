@@ -15,6 +15,7 @@ from configs.adaptive_axonal_delay_config import AdaptiveAxonalDelayConfig
 from configs.base_config import BenchmarkBaseConfig
 from configs.axonal_delay_modelPYTORCH_config import AdaptiveAxonalDelayPyTorchConfig
 from configs.log_buffer_aad_config import LogBufferAADConfig
+from configs.three_factor_delay_config import ThreeFactorDelayConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -25,6 +26,8 @@ MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
     "adaptive_axonal_delay" : AdaptiveAxonalDelayConfig,
     "aad_pytorch"             : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
     "aad_log_buffer"        : LogBufferAADConfig,
+     "three_factor_delay": ThreeFactorDelayConfig,
+
 }
 
 
