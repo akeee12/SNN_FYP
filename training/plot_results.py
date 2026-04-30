@@ -65,7 +65,7 @@ def discover_results(results_root: str,
     results = []
 
     # Walk all subdirectories
-    for entry in sorted(os.scandir(results_root)):
+    for entry in sorted(os.scandir(results_root), key=lambda e: e.name):
         if not entry.is_dir():
             continue
 
