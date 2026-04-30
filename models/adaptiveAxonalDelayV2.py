@@ -487,7 +487,7 @@ class SpikeRateLoss(nn.Module):
 # FULL NETWORK
 # ─────────────────────────────────────────────────────────────────────────────
 
-class AdaptiveAxonalDelayNet(nn.Module):
+class AdaptiveAxonalDelayNetV2(nn.Module):
     """
     Faithful PyTorch reproduction of Sun et al. ICASSP 2023.
 
