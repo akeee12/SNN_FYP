@@ -25,10 +25,10 @@ from configs.adaptiveAxonalDelayV2_config import AdaptiveAxonalDelayV2Config
 MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
     "dcls"                  : DCLSConfig,
     "adaptive_axonal_delay" : AdaptiveAxonalDelayConfig,
-    "aad_pytorch"             : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
+    "aad_pytorch"           : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
     "aad_log_buffer"        : LogBufferAADConfig,
-     "three_factor_delay": ThreeFactorDelayConfig,
-     "Adaptive_axonalv2": AdaptiveAxonalDelayV2Config,
+    "three_factor_delay"    : ThreeFactorDelayConfig,
+    "Adaptive_axonalv2"     : AdaptiveAxonalDelayV2Config,
 
 }
 
