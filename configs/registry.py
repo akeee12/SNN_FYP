@@ -28,11 +28,11 @@ MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
     "aad_pytorch"           : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
     "aad_log_buffer"        : LogBufferAADConfig,
     "three_factor_delay"    : ThreeFactorDelayConfig,
-    "Adaptive_axonalv2"     : AdaptiveAxonalDelayV2Config,
+    "aad_v2"     : AdaptiveAxonalDelayV2Config,
 
 }
 
-
+#
 def get_config(model_name: str, **overrides) -> BenchmarkBaseConfig:
     """
     Factory: returns an instantiated config for the given model name.
