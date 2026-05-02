@@ -96,7 +96,7 @@ class LogBuffer(nn.Module):
 # FULL NETWORK
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LogBufferAADNet(nn.Module):
+class LogBufferAADNetV1(nn.Module):
     """
     AAD network with log-buffer replacing FC1.
 
