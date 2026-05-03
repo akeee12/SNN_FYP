@@ -226,11 +226,11 @@ class SRMLayer(nn.Module):
         self.refractory = RefractoryKernel(
             tau_r, theta_u, alpha_r, kernel_size)
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            x: (B, N, T) — weighted input
-            returns: (B, N, T) — spike tensor
-            """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B, N, T) — weighted input
+        returns: (B, N, T) — spike tensor
+        """
         u_ff    = self.psp(x)           # full conv in one pass — (B, N, T)
         B, N, T = u_ff.shape
         spikes  = torch.zeros_like(u_ff)
