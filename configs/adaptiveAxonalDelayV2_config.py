@@ -42,9 +42,9 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     # Confirmed from network.yaml and SLAYER source
     # ─────────────────────────────────────────────────────────────────
 
-    tau_s      = 1.0       # tauSr  — PSP time constant
-    tau_r      = 1.0       # tauRef — refractory time constant
-    theta_u    = 10.0      # theta  — firing threshold (NOT 0.1)
+    tau_s      = 5.0       # tauSr  — PSP time constant
+    tau_r      = 2.0       # tauRef — refractory time constant
+    theta_u    = 0.5      # theta  — firing threshold (NOT 0.1)
     alpha_r    = 2.0       # scaleRef — refractory scale
 
     # ─────────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     # ─────────────────────────────────────────────────────────────────
 
     optimizer     = "nadam"
-    lr            = 0.1        # confirmed from Pengfei training script
+    lr            = 0.001        # confirmed from Pengfei training script
     lr_milestones = [800]      # MultiStepLR milestone
     lr_gamma      = 0.5        # decay factor
 
@@ -111,7 +111,7 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     # Applied as: weight.data *= 10.0 after nn.Linear init
     # ─────────────────────────────────────────────────────────────────
 
-    weight_scale    = 10.0     # SLAYER _denseLayer default
+    weight_scale    = 1.0     # SLAYER _denseLayer default
     use_weight_norm = False    # NOT in SLAYER — confirmed absent
 
     # ─────────────────────────────────────────────────────────────────
