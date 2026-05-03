@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Import from your existing V2 model file
-from axonal_delay_modelPYTorchV2 import (
+from adaptiveAxonalDelayV2 import (
     SRMLayer,
     AxonalDelay,
     PSPKernel,
