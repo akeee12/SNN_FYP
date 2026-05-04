@@ -450,7 +450,6 @@ class AxonalDelay(nn.Module):
 # This is van Rossum distance — PSP-filtered spike train difference
 # ─────────────────────────────────────────────────────────────────────────────
 
-class SpikeRateLoss(nn.Module):
     """
     Van Rossum spike rate loss — confirmed from spikeLoss.py.
 
@@ -472,38 +471,67 @@ class SpikeRateLoss(nn.Module):
     tensor with spikes placed uniformly in the target window.
     """
 
+class SpikeRateLoss(nn.Module):
+    """
+    NumSpikes loss — confirmed from spikeLoss.py numSpikes().
+
+    NMNIST yaml reference:
+        tgtSpikeCount: {true: 60, false: 10} over tSample=300
+        scaled to time_steps=400:
+            tgt_count_true  = 80
+            tgt_count_false = 13
+    """
+
     def __init__(self, psp_kernel: PSPKernel, Ts: float = 1.0):
         super().__init__()
         self.psp = psp_kernel
         self.Ts  = Ts
 
-    def forward(self, spike_out: torch.Tensor,
-            labels: torch.Tensor,
-            target_true: float = 0.8,
-            target_false: float = 0.0,
-            T: int = 400) -> torch.Tensor:
-        B, C, _ = spike_out.shape
+    def forward(self,
+                spike_out:       torch.Tensor,
+                labels:          torch.Tensor,
+                tgt_count_true:  int = 80,
+                tgt_count_false: int = 13,
+                start:           int = 0,
+                stop:            int = 400,
+                ) -> torch.Tensor:
 
-        # Confirmed SLAYER approach — sparse binary target
-        # n_spikes placed uniformly for correct class
-        # wrong classes get zero desired spikes
-        n_spikes    = max(1, int(target_true * T / 50))  # ~4 for T=400
-        spike_times = torch.linspace(0, T-1, n_spikes,
-                                    dtype=torch.long,
-                                    device=spike_out.device)
+        B, C, T = spike_out.shape
+        device  = spike_out.device
+        window  = stop - start
 
-        desired = torch.zeros_like(spike_out)
-        for b in range(B):
-            desired[b, labels[b], spike_times] = 1.0
+        # desired spike counts per neuron
+        desired_counts = torch.full(
+            (B, C), float(tgt_count_false),
+            device=device, dtype=spike_out.dtype
+        )
+        desired_counts[torch.arange(B), labels] = float(tgt_count_true)
 
-        # van Rossum distance — PSP filtered difference
-        diff  = spike_out - desired
-        error = self.psp(diff)
+        # actual counts in window — confirmed: sum * Ts
+        actual_counts = (
+            spike_out[:, :, start:stop].sum(dim=-1) * self.Ts
+        )
 
-        # Confirmed from spikeLoss.py — sum not mean
+        # count error — confirmed: (actual - desired) / windowLength
+        count_error = (
+            (actual_counts - desired_counts) / window
+        ).unsqueeze(-1)
+
+        # target region mask
+        mask = torch.zeros(B, C, T, device=device)
+        mask[:, :, start:stop] = 1.0
+
+        # van Rossum outside window
+        # inside window: spikeDesired = spikeOut so diff = 0
+        spike_desired = spike_out * mask
+        diff          = spike_out - spike_desired
+        error         = self.psp(diff)
+
+        # add count error inside window
+        error = error + count_error * mask
+
+        # confirmed from spikeLoss.py: sum not mean
         return 0.5 * torch.sum(error ** 2) * self.Ts
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # FULL NETWORK
 # ─────────────────────────────────────────────────────────────────────────────
@@ -587,18 +615,17 @@ class AdaptiveAxonalDelayNetV2(nn.Module):
 
         return x                                             # (B, 20, T)
 
-    def compute_loss(self, spike_out: torch.Tensor,
-                     labels: torch.Tensor,
-                     cfg) -> torch.Tensor:
-        """
-        Van Rossum loss — call this instead of F.mse_loss.
-        spike_out: (B, 20, T) — raw output before sum
-        """
+    def compute_loss(self,
+                 spike_out: torch.Tensor,
+                 labels:    torch.Tensor,
+                 cfg) -> torch.Tensor:
         return self.loss_fn(
-            spike_out, labels,
-            target_true=cfg.target_true,
-            target_false=cfg.target_false,
-            T=cfg.time_steps
+            spike_out,
+            labels,
+            tgt_count_true  = cfg.tgt_count_true,
+            tgt_count_false = cfg.tgt_count_false,
+            start           = cfg.tgt_region_start,
+            stop            = cfg.tgt_region_stop,
         )
 
     def predict(self, spike_out: torch.Tensor) -> torch.Tensor:
