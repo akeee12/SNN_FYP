@@ -348,21 +348,33 @@ class DelayGradient(torch.autograd.Function):
         out, delay = ctx.saved_tensors
         B, N, T    = out.shape
 
-        # Finite diff on shifted output — confirmed from _delayFunction
-        # diffFilter = [-1, 1] / Ts, Ts=1 so just [-1, 1]
-        out_r   = out.reshape(B * N, 1, T)
-        out_pad = F.pad(out_r, (1, 0))
-        diff_k  = torch.tensor(
+        # ── Gradient w.r.t. delay ─────────────────────────────────────
+        # Confirmed from _delayFunction.backward:
+        #   diffFilter = [-1, 1] / Ts
+        #   outputDiff = slayerCuda.conv(output, diffFilter, 1)
+        #   gradDelay  = sum(gradOutput * outputDiff, [0,-1]) * Ts
+        out_r    = out.reshape(B * N, 1, T)
+        out_pad  = F.pad(out_r, (1, 0))
+        diff_k   = torch.tensor(
             [-1.0, 1.0], device=out.device, dtype=out.dtype
         ).view(1, 1, -1)
-        out_diff = F.conv1d(out_pad, diff_k).reshape(B, N, T)
-
-        # gradDelay: sum over batch(0) and time(-1), scale by Ts=1
+        out_diff   = F.conv1d(out_pad, diff_k).reshape(B, N, T)
         grad_delay = (grad_output * out_diff).sum(dim=(0, 2))  # (N,)
 
-        # gradInput: SLAYER shifts back by -delay
-        # Approximated as identity here
-        grad_input = grad_output.clone()
+        # ── Gradient w.r.t. input ─────────────────────────────────────
+        # Confirmed from _delayFunction.backward:
+        #   gradInput = slayerCuda.shift(gradOutput, -delay, Ts)
+        # Shift grad_output BACKWARD by delay amount
+        # This realigns the gradient with the pre-delay spike positions
+        grad_input = torch.zeros_like(grad_output)
+        for n in range(N):
+            d = int(delay[n].floor().item())
+            if d == 0:
+                grad_input[:, n, :] = grad_output[:, n, :]
+            elif d < T:
+                # shift left by d — gradient travels back through the delay
+                grad_input[:, n, :T-d] = grad_output[:, n, d:]
+                # positions 0:d get zero — out of bounds = 0
 
         return grad_input, grad_delay
 
