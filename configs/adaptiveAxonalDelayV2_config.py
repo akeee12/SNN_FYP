@@ -36,131 +36,63 @@ from configs.base_config import BenchmarkBaseConfig
 
 class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
 
-    # ── Identity ──────────────────────────────────────────────────────
     model_name = "AdaptiveAxonalDelayNetV2"
 
-    # ─────────────────────────────────────────────────────────────────
-    # ARCHITECTURE
-    # Confirmed from AdaptiveAxonalDelayConfig (SLAYER version)
-    # ─────────────────────────────────────────────────────────────────
-
+    # ── Architecture ──────────────────────────────────────────────────
     n_inputs   = 700
     n_hidden   = 128
     n_outputs  = 20
-    time_steps = 400       # tSample=400 confirmed from SLAYER config
+    time_steps = 400
     Ts         = 1.0
 
-    # ─────────────────────────────────────────────────────────────────
-    # SRMALPHA NEURON PARAMETERS
-    # Confirmed from AdaptiveAxonalDelayConfig neuron_params
-    # ─────────────────────────────────────────────────────────────────
+    # ── Neuron parameters — confirmed from Pengfei SLAYER config ──────
+    # tauSr=1.0, tauRef=1.0, theta=10, scaleRef=1, tauRho=1, scaleRho=1
+    tau_s      = 1.0        # FIX: was 10.0 — SLAYER tauSr=1.0
+    tau_r      = 1.0        # tauRef=1.0
+    alpha_r    = 1.0        # scaleRef=1
+    theta_u    = 10.0       # FIX: was 2.0 — SLAYER theta=10
+                            # With tau_s=1.0 the PSP kernel decays in ~5
+                            # timesteps. u_ff will reach ~10 with weight_scale=10
+    tau_rho    = 1.0        # tauRho=1
+    scale_rho  = 1.0        # scaleRho=1
 
-    tau_s      = 10.0       # tauSr=1.0   confirmed from SLAYER config
-    tau_r      = 1.0       # tauRef=1.0  confirmed from SLAYER config
-    alpha_r    = 1.0       # scaleRef=1  confirmed from SLAYER config
-                           # NOTE: NMNIST yaml uses scaleRef=2 — SLAYER
-                           # SHD config uses scaleRef=1. Using SHD value.
+    # ── PSP / refractory kernel length ────────────────────────────────
+    # With tau_s=1.0: exp(-t/1.0) < 0.01 at t=5 → kernel_size=32 is safe
+    kernel_size = 32
 
-    # ─────────────────────────────────────────────────────────────────
-    # THRESHOLD — recalibrated for PyTorch approximation
-    #
-    # SLAYER original : theta=10
-    # PyTorch probe   : u_ff max ~7-8 regardless of weight scale
-    #                   (PSP conv approximation saturates below 10)
-    # Recalibrated    : theta=2.0
-    #                   sits at 85th percentile of u_ff distribution
-    #                   same relative position as theta=10 in SLAYER
-    # ─────────────────────────────────────────────────────────────────
-
-    theta_u    = 2.0       # recalibrated from 10.0 — see module docstring
-
-    # ─────────────────────────────────────────────────────────────────
-    # SURROGATE GRADIENT
-    # Confirmed from AdaptiveAxonalDelayConfig neuron_params
-    # ─────────────────────────────────────────────────────────────────
-
-    tau_rho    = 1.0       # tauRho=1    confirmed
-    scale_rho  = 1.0       # scaleRho=1  confirmed
-
-    # ─────────────────────────────────────────────────────────────────
-    # ALPHA KERNEL
-    # ─────────────────────────────────────────────────────────────────
-
-    kernel_epsilon = 0.01  # SLAYER default stopping condition
-
-    # ─────────────────────────────────────────────────────────────────
-    # ADAPTIVE DELAY SCHEDULER
-    # Confirmed from AdaptiveAxonalDelayConfig
-    # ─────────────────────────────────────────────────────────────────
-
+    # ── Adaptive delay scheduler ──────────────────────────────────────
     delay_init_cap      = 64
     delay_adapt_start   = 250
     delay_adapt_window  = 150
     delay_percentile    = 0.95
     delay_expand_margin = 5
 
-    # ─────────────────────────────────────────────────────────────────
-    # LOSS — NumSpikes, derived from NMNIST yaml scaled to time_steps
-    #
-    # NMNIST reference yaml:
-    #     tgtSpikeCount: {true: 60, false: 10}
-    #     tgtSpikeRegion: {start: 0, stop: 300}  (= tSample)
-    #
-    # Rate preservation:
-    #     true_rate  = 60  / 300 = 0.2000 spikes/timestep
-    #     false_rate = 10  / 300 = 0.0333 spikes/timestep
-    #
-    # Scaled to time_steps=400:
-    #     tgt_count_true  = round(0.2000 * 400) = 80
-    #     tgt_count_false = round(0.0333 * 400) = 13
-    #
-    # These are computed dynamically below so changing time_steps
-    # automatically rescales the targets.
-    # ─────────────────────────────────────────────────────────────────
+    # ── Loss — NumSpikes, scaled from NMNIST yaml ─────────────────────
+    # true_rate  = 60/300 = 0.200 → tgt_count_true  = 80
+    # false_rate = 10/300 = 0.033 → tgt_count_false = 13
+    _true_rate  = 60 / 300
+    _false_rate = 10 / 300
 
-    _true_rate  = 60  / 300    # 0.2000 — from NMNIST yaml
-    _false_rate = 10  / 300    # 0.0333 — from NMNIST yaml
+    tgt_count_true  = max(1, round(_true_rate  * time_steps))   # 80
+    tgt_count_false = max(0, round(_false_rate * time_steps))   # 13
+    tgt_region_start = 0
+    tgt_region_stop  = time_steps
 
-    tgt_count_true = max(1, round(_true_rate * time_steps))
-
-    tgt_count_false = max(0, round(_false_rate * time_steps))
-    tgt_region_start =  0                   # always full window from t=0
-
-    tgt_region_stop =  time_steps     # always full window to end
-
-    # ─────────────────────────────────────────────────────────────────
-    # OPTIMISER
-    # Confirmed from AdaptiveAxonalDelayConfig
-    # ─────────────────────────────────────────────────────────────────
-
+    # ── Optimiser — Pengfei uses lr=0.1, we keep 0.001 for stability ──
     optimizer     = "nadam"
-    lr            = 0.001      # reduced from 0.1 — confirmed needed
-                               # for PyTorch SRM gradient stability
-    lr_milestones = [300]      # single decay — milestone at 300
+    lr            = 0.001
+    lr_milestones = [300]
     lr_gamma      = 0.5
 
-    # ─────────────────────────────────────────────────────────────────
-    # DATALOADER
-    # Confirmed from AdaptiveAxonalDelayConfig
-    # ─────────────────────────────────────────────────────────────────
-
+    # ── Dataloader ────────────────────────────────────────────────────
     batch_size  = 128
     num_workers = 4
 
-    # ─────────────────────────────────────────────────────────────────
-    # WEIGHT INITIALISATION
-    # Confirmed from AdaptiveAxonalDelayConfig + SLAYER _denseLayer
-    # use_weight_norm=True in SLAYER config but NOT in SLAYER source
-    # _denseLayer does not apply weight_norm — confirmed absent
-    # ─────────────────────────────────────────────────────────────────
+    # ── Weight initialisation — confirmed from SLAYER _denseLayer ─────
+    weight_scale    = 10.0
+    use_weight_norm = True    # FIX: Pengfei uses weight_norm — match it
 
-    weight_scale    = 10.0     # confirmed from _denseLayer default
-    use_weight_norm = False    # absent from _denseLayer source
-
-    # ─────────────────────────────────────────────────────────────────
-    # TRAINING
-    # ─────────────────────────────────────────────────────────────────
-
+    # ── Training ──────────────────────────────────────────────────────
     epochs           = 500
     save_checkpoints = True
     checkpoint_every = 50
