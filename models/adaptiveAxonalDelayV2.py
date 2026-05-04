@@ -478,34 +478,29 @@ class SpikeRateLoss(nn.Module):
         self.Ts  = Ts
 
     def forward(self, spike_out: torch.Tensor,
-                labels: torch.Tensor,
-                target_true: float = 0.8,
-                target_false: float = 0.0,
-                T: int = 400) -> torch.Tensor:
-        """
-        Args:
-            spike_out   : (B, C, T) — output spike tensor
-            labels      : (B,) — ground truth class indices
-            target_true : desired rate for correct class
-            target_false: desired rate for other classes
-            T           : number of timesteps
-        Returns:
-            loss: scalar
-        """
+            labels: torch.Tensor,
+            target_true: float = 0.8,
+            target_false: float = 0.0,
+            T: int = 400) -> torch.Tensor:
         B, C, _ = spike_out.shape
 
-        # Build desired spike train — constant rate approximation
-        desired = torch.full(
-            spike_out.shape, target_false,
-            dtype=spike_out.dtype, device=spike_out.device
-        )
-        desired[torch.arange(B), labels, :] = target_true
+        # Confirmed SLAYER approach — sparse binary target
+        # n_spikes placed uniformly for correct class
+        # wrong classes get zero desired spikes
+        n_spikes    = max(1, int(target_true * T / 50))  # ~4 for T=400
+        spike_times = torch.linspace(0, T-1, n_spikes,
+                                    dtype=torch.long,
+                                    device=spike_out.device)
 
-        # PSP-filtered difference — van Rossum distance
+        desired = torch.zeros_like(spike_out)
+        for b in range(B):
+            desired[b, labels[b], spike_times] = 1.0
+
+        # van Rossum distance — PSP filtered difference
         diff  = spike_out - desired
         error = self.psp(diff)
 
-        # Confirmed: 0.5 * sum(error^2) * Ts
+        # Confirmed from spikeLoss.py — sum not mean
         return 0.5 * torch.sum(error ** 2) * self.Ts
 
 
