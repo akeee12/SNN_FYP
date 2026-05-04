@@ -260,21 +260,47 @@ class SRMLayer(nn.Module):
         x: (B, N, T) — weighted input
         returns: (B, N, T) — spike tensor
         """
-        u_ff    = self.psp(x)                      # one conv pass
+        u_ff    = self.psp(x)           # full conv in one pass — (B, N, T)
         B, N, T = u_ff.shape
         spikes  = torch.zeros_like(u_ff)
+        klen    = self.refractory.kernel_len   # ~5 for tau_r=1, ~25 for tau_r=2
 
         for t in range(T):
-            # Causal refractory — future spikes are zero
-            # so conv only sees past spikes at step t
-            ref            = self.refractory(spikes)[:, :, t]
-            u_t            = u_ff[:, :, t] + ref
+
+            if t == 0:
+                # no history yet — refractory contribution is zero
+                ref = torch.zeros(B, N, device=x.device, dtype=x.dtype)
+
+            else:
+                # Only look at past spikes — spikes[:,:,t:] are still zero
+                # so we only need spikes[:,:,:t]
+                # Also the kernel is short (klen steps) so we only need
+                # the last klen-1 timesteps of history at most
+                start   = max(0, t - klen + 1)          # how far back kernel reaches
+                past    = spikes[:, :, start:t]          # (B, N, window)
+                window  = past.shape[2]
+
+                # reshape for conv1d: (B*N, 1, window)
+                past    = past.reshape(B * N, 1, window)
+
+                # causal pad so output aligns with current t
+                past    = F.pad(past, (klen - 1, 0))
+
+                # convolve with refractory kernel
+                ref_all = F.conv1d(past, self.refractory.kernel)  # (B*N, 1, ?)
+
+                # take only the final output — that's the ref at timestep t
+                ref     = ref_all[:, 0, -1].reshape(B, N)
+
+            # combine feedforward potential with refractory suppression
+            u_t             = u_ff[:, :, t] + ref
+
+            # fire if above threshold — surrogate gradient in backward
             spikes[:, :, t] = SLAYERSurrogate.apply(
                 u_t, self.theta_u, self.tau_rho, self.scale_rho
             )
 
         return spikes
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AXONAL DELAY
