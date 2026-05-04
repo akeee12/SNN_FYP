@@ -55,7 +55,7 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     # Confirmed from AdaptiveAxonalDelayConfig neuron_params
     # ─────────────────────────────────────────────────────────────────
 
-    tau_s      = 1.0       # tauSr=1.0   confirmed from SLAYER config
+    tau_s      = 10.0       # tauSr=1.0   confirmed from SLAYER config
     tau_r      = 1.0       # tauRef=1.0  confirmed from SLAYER config
     alpha_r    = 1.0       # scaleRef=1  confirmed from SLAYER config
                            # NOTE: NMNIST yaml uses scaleRef=2 — SLAYER
