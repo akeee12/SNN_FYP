@@ -38,6 +38,10 @@ class LogBufferAADConfigv1(AdaptiveAxonalDelayV2Config):
     buffer_max_lag = 64    # max lag — matches delay_init_cap
                            # lags = {1,2,4,8,16,32,64} → L=7
                            # try: 16 (L=5), 32 (L=6), 64 (L=7)
+                           
+                           # ── ADD THESE TWO LINES ───────────────────────────────────────────
+    target_true  = 0.8
+    target_false = 0.0
 
     # ── Parameter count reference ─────────────────────────────────────
     # k=16, L=7: 700*16 + 112*128 = 11,200 + 14,336 = 25,536  (-71%)
