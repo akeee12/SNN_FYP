@@ -1,6 +1,6 @@
-# models/log_buffer_aad_model.py
+# models/log_buffer_aad_modelv1.py
 """
-LogBufferAADNet — AAD network with log-buffer input projection.
+LogBufferAADNetV1 — AAD network with log-buffer input projection.
 
 Replaces FC1 [700→128] with:
     FC_proj  [700→k]     spatial compression
@@ -8,6 +8,7 @@ Replaces FC1 [700→128] with:
     FC_expand [k*L→128]  project back to hidden dim
 
 Everything from SRM1 onwards is identical to AdaptiveAxonalDelayNetV2.
+Imports all components from adaptiveAxonalDelayV2.py directly.
 """
 
 import math
@@ -15,12 +16,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Import from your existing V2 model file
 from adaptiveAxonalDelayV2 import (
-    SRMLayer,
+    SLAYERSurrogate,
+    DelayGradient,
     AxonalDelay,
     PSPKernel,
-    SpikeRateLoss,
+    RefractoryKernel,
+    SRMLayer,
+    VanRossumLoss,
 )
 
 
@@ -34,25 +37,16 @@ class LogBuffer(nn.Module):
 
     Takes (B, k, T) and returns (B, k*L, T) where:
         L    = floor(log2(max_lag)) + 1
-        lags = {1, 2, 4, 8,..., max_lag}
+        lags = {1, 2, 4, 8, ..., max_lag}
 
-    At each timestep t, output contains:
-        channels [0      : k]     = input at t
-        channels [k      : 2k]    = input at t-1
-        channels [2k     : 3k]    = input at t-2
-        channels [3k     : 4k]    = input at t-4...
-        channels [(L-1)k : L*k]   = input at t-max_lag
-
+    Zero learnable parameters — purely structural.
     Out-of-bounds (t < lag) filled with zeros — causal.
-    Zero learnable parameters.
     """
 
     def __init__(self, n_neurons: int, max_lag: int = 64):
         super().__init__()
         self.n_neurons = n_neurons
 
-        # Build log-spaced lags
-        # floor(log2(64)) + 1 = 6 + 1 = 7 lags
         L         = int(math.floor(math.log2(max_lag))) + 1
         self.lags = [2**i for i in range(L)]
         self.L    = len(self.lags)
@@ -70,9 +64,9 @@ class LogBuffer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (B, k, T) — input tensor (continuous or binary)
+            x: (B, k, T)
         Returns:
-            out: (B, k*L, T) — concatenated lag history
+            out: (B, k*L, T)
         """
         B, N, T = x.shape
         lagged  = []
@@ -81,14 +75,9 @@ class LogBuffer(nn.Module):
             if lag == 0:
                 lagged.append(x)
             else:
-                # Pad lag zeros at start, trim end to keep length T
-                # shifted[:, :, t] = x[:, :, t - lag]
-                # zeros for t < lag (causal — no future leakage)
                 shifted = F.pad(x, (lag, 0))[:, :, :T]
                 lagged.append(shifted)
 
-        # Concatenate along neuron dimension
-        # List of L tensors each (B, k, T) → (B, k*L, T)
         return torch.cat(lagged, dim=1)
 
 
@@ -100,47 +89,27 @@ class LogBufferAADNetV1(nn.Module):
     """
     AAD network with log-buffer replacing FC1.
 
-    Architecture:
-        Input (B, T, 700)
-            ↓
-        FC_proj  [700 → k]          spatial compression
-            ↓
-        LogBuffer [k → k*L]         temporal history (0 params)
-            ↓
-        FC_expand [k*L → 128]       project to hidden dim
-            ↓
-        SRM1 [128]                  unchanged from V2
-            ↓
-        Delay1 [128]                unchanged from V2
-            ↓
-        FC2 [128 → 128]             unchanged from V2
-            ↓
-        SRM2 [128]                  unchanged from V2
-            ↓
-        Delay2 [128]                unchanged from V2
-            ↓
-        FC3 [128 → 20]              unchanged from V2
-            ↓
-        SRM3 [20]                   unchanged from V2
-            ↓
-        (B, 20, T)
+    Input : (B, T, 700)
+    Output: (B, 20, T)
     """
 
     def __init__(self, cfg):
         super().__init__()
 
-        k       = cfg.buffer_size     # bottleneck dimension
-        max_lag = cfg.buffer_max_lag  # max temporal lag
+        k       = cfg.buffer_size
+        max_lag = cfg.buffer_max_lag
 
+        # ── SRM kwargs — matches adaptiveAxonalDelayV2.SRMLayer ───────
+        # SRMLayer takes: tau_s, tau_r, theta_u, alpha_r,
+        #                 tau_rho, scale_rho, kernel_size
         srm_kwargs = dict(
-            tau_s     = cfg.tau_s,
-            tau_r     = cfg.tau_r,
-            theta_u   = cfg.theta_u,
-            scale_ref = cfg.alpha_r,
-            tau_rho   = cfg.tau_rho,
-            scale_rho = cfg.scale_rho,
-            T_sample  = cfg.time_steps,
-            Ts        = 1.0,
+            tau_s       = cfg.tau_s,
+            tau_r       = cfg.tau_r,
+            theta_u     = cfg.theta_u,
+            alpha_r     = cfg.alpha_r,
+            tau_rho     = cfg.tau_rho,
+            scale_rho   = cfg.scale_rho,
+            kernel_size = cfg.kernel_size,
         )
 
         # ── Log-buffer block (replaces FC1) ───────────────────────────
@@ -160,30 +129,35 @@ class LogBufferAADNetV1(nn.Module):
         self.fc3    = nn.Linear(cfg.n_hidden, cfg.n_outputs, bias=False)
         self.srm3   = SRMLayer(**srm_kwargs)
 
-        # ── Weight init x10 — matches SLAYER weightScale=10 ───────────
+        # ── Weight init ×10 — matches SLAYER weightScale=10 ───────────
         with torch.no_grad():
             self.fc_proj.weight.data   *= cfg.weight_scale
             self.fc_expand.weight.data *= cfg.weight_scale
             self.fc2.weight.data       *= cfg.weight_scale
             self.fc3.weight.data       *= cfg.weight_scale
 
-        # ── Loss ──────────────────────────────────────────────────────
-        loss_psp     = PSPKernel(cfg.tau_s, cfg.time_steps, 1.0)
-        self.loss_fn = SpikeRateLoss(loss_psp, Ts=1.0)
+        # ── Loss — VanRossumLoss matching V2 exactly ──────────────────
+        self.loss_fn    = VanRossumLoss(
+            tau_s       = cfg.tau_s,
+            kernel_size = cfg.kernel_size,
+            Ts          = cfg.Ts,
+        )
+        self._tgt_true  = cfg.tgt_count_true
+        self._tgt_false = cfg.tgt_count_false
 
-        # ── Print parameter summary ───────────────────────────────────
+        # ── Parameter summary ─────────────────────────────────────────
         self._print_param_summary(k, max_lag)
 
     def _print_param_summary(self, k: int, max_lag: int):
-        L          = self.log_buf.L
-        fc_proj_p  = self.fc_proj.weight.numel()
-        fc_exp_p   = self.fc_expand.weight.numel()
-        fc2_p      = self.fc2.weight.numel()
-        fc3_p      = self.fc3.weight.numel()
-        delay_p    = (self.delay1.delay.numel() +
-                      self.delay2.delay.numel())
-        total      = fc_proj_p + fc_exp_p + fc2_p + fc3_p + delay_p
-        baseline   = 700*128 + 128*128 + 128*20 + 256
+        L         = self.log_buf.L
+        fc_proj_p = self.fc_proj.weight.numel()
+        fc_exp_p  = self.fc_expand.weight.numel()
+        fc2_p     = self.fc2.weight.numel()
+        fc3_p     = self.fc3.weight.numel()
+        delay_p   = (self.delay1.delay.numel() +
+                     self.delay2.delay.numel())
+        total     = fc_proj_p + fc_exp_p + fc2_p + fc3_p + delay_p
+        baseline  = 700*128 + 128*128 + 128*20 + 256
 
         print(f"\n  LogBufferAADNet parameter summary:")
         print(f"    k={k}, max_lag={max_lag}, L={L}")
@@ -201,64 +175,59 @@ class LogBufferAADNetV1(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (B, T, 700) — raw SHD spike tensor
+            x: (B, T, 700)
         Returns:
-            out: (B, 20, T) — output spike tensor
+            out: (B, 20, T)
         """
-        # (B, T, 700) → (B, 700, T)
-        x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1)                              # (B, 700, T)
 
         # ── Log-buffer block ──────────────────────────────────────────
-        # Spatial compression: (B, 700, T) → (B, k, T)
         x = self.fc_proj(
             x.permute(0, 2, 1)
-        ).permute(0, 2, 1)
+        ).permute(0, 2, 1)                                   # (B, k, T)
 
-        # Temporal history: (B, k, T) → (B, k*L, T)
-        x = self.log_buf(x)
+        x = self.log_buf(x)                                  # (B, k*L, T)
 
-        # Project to hidden dim: (B, k*L, T) → (B, 128, T)
         x = self.fc_expand(
             x.permute(0, 2, 1)
-        ).permute(0, 2, 1)
+        ).permute(0, 2, 1)                                   # (B, 128, T)
 
-        # ── Hidden layer 1 — identical to V2 ─────────────────────────
+        # ── Hidden layer 1 ────────────────────────────────────────────
         x = self.srm1(x)
         x = self.delay1(x)
 
-        # ── Hidden layer 2 — identical to V2 ─────────────────────────
+        # ── Hidden layer 2 ────────────────────────────────────────────
         x = self.fc2(
             x.permute(0, 2, 1)
-        ).permute(0, 2, 1)
+        ).permute(0, 2, 1)                                   # (B, 128, T)
         x = self.srm2(x)
         x = self.delay2(x)
 
-        # ── Output layer — identical to V2 ───────────────────────────
+        # ── Output layer ──────────────────────────────────────────────
         x = self.fc3(
             x.permute(0, 2, 1)
-        ).permute(0, 2, 1)
+        ).permute(0, 2, 1)                                   # (B, 20, T)
         x = self.srm3(x)
 
-        return x    # (B, 20, T)
+        return x                                             # (B, 20, T)
 
-    def compute_loss(self, spike_out, labels, cfg):
+    def compute_loss(self, spike_out: torch.Tensor,
+                     labels: torch.Tensor,
+                     cfg=None) -> torch.Tensor:
+        """Matches V2 compute_loss signature exactly."""
         return self.loss_fn(
             spike_out, labels,
-            target_true  = cfg.target_true,
-            target_false = cfg.target_false,
-            T            = cfg.time_steps,
+            self._tgt_true,
+            self._tgt_false,
         )
 
-    def predict(self, spike_out):
+    def predict(self, spike_out: torch.Tensor) -> torch.Tensor:
+        """(B, 20, T) → (B,) predicted class."""
         return spike_out.sum(dim=-1).argmax(dim=1)
 
     def clamp_delays(self, thea1: float, thea2: float):
         self.delay1.clamp_delays(thea1)
         self.delay2.clamp_delays(thea2)
-
-    def update_delay_caps(self, thea1: float, thea2: float):
-        self.delay1.update_max_delay(thea1)
-        self.delay2.update_max_delay(thea2)
 
     def get_delay_stats(self) -> dict:
         return {
