@@ -23,14 +23,16 @@ from configs.log_buffer_aad_configv1 import LogBufferAADConfigv1
 # REGISTRY
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_REGISTRY = {
+MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
     "dcls"                  : DCLSConfig,
     "adaptive_axonal_delay" : AdaptiveAxonalDelayConfig,
-    "aad_pytorch"           : AdaptiveAxonalDelayPyTorchConfig,
+    "aad_pytorch"           : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
     "aad_log_buffer"        : LogBufferAADConfig,
     "three_factor_delay"    : ThreeFactorDelayConfig,
-    "aad_v2"                : AdaptiveAxonalDelayV2Config,
-    "log_buffer"            : LogBufferAADConfigv1,
+    "aad_v2"     : AdaptiveAxonalDelayV2Config,
+    "log_buffer" : LogBufferAADConfigv1,
+
+
 }
 
 #
