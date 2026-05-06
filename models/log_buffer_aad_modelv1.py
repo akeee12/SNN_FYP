@@ -31,7 +31,7 @@ from adaptiveAxonalDelayV2 import (
 # LOG BUFFER — zero parameters, pure temporal structure
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LogBuffer(nn.Module):
+class LogBufferAADNetV1(nn.Module):
     """
     Temporal log-spaced history buffer.
 
@@ -114,7 +114,7 @@ class LogBufferAADNetV1(nn.Module):
 
         # ── Log-buffer block (replaces FC1) ───────────────────────────
         self.fc_proj   = nn.Linear(cfg.n_inputs, k, bias=False)
-        self.log_buf   = LogBuffer(k, max_lag)
+        self.log_buf   = LogBufferAADNetV1(k, max_lag)
         self.fc_expand = nn.Linear(self.log_buf.output_dim,
                                    cfg.n_hidden, bias=False)
 
