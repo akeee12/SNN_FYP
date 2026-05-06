@@ -76,6 +76,6 @@ def get_config(model_name: str, **overrides) -> BenchmarkBaseConfig:
     return cfg
 
 
-def list_models() -> list[str]:
+def list_models():
     """Returns all registered model keys."""
     return sorted(MODEL_REGISTRY.keys())
