@@ -274,6 +274,11 @@ class AdaptiveAxonalDelayNetV2(nn.Module):
             nn.Linear(cfg.n_hidden,  cfg.n_hidden,  bias=False), name='weight')
         self.fc3 = nn.utils.weight_norm(
             nn.Linear(cfg.n_hidden,  cfg.n_outputs, bias=False), name='weight')
+        # ADD THIS after creating the layers — scale weight_g (the norm component)
+        with torch.no_grad():
+            self.fc1.weight_g.fill_(cfg.weight_scale)
+            self.fc2.weight_g.fill_(cfg.weight_scale)
+            self.fc3.weight_g.fill_(cfg.weight_scale)
 
         self.delay1 = AxonalDelay(cfg.n_hidden, max_delay=cfg.delay_init_cap)
         self.delay2 = AxonalDelay(cfg.n_hidden, max_delay=cfg.delay_init_cap)
