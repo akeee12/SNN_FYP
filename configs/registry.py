@@ -24,7 +24,7 @@ from configs.log_buffer_aad_configv1 import LogBufferAADConfigv1
 # REGISTRY
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_REGISTRY: dict[str, type[BenchmarkBaseConfig]] = {
+MODEL_REGISTRY = {
     "dcls"                  : DCLSConfig,
     "adaptive_axonal_delay" : AdaptiveAxonalDelayConfig,
     "aad_pytorch"           : AdaptiveAxonalDelayPyTorchConfig, # PyTorch version
@@ -77,6 +77,6 @@ def get_config(model_name: str, **overrides) -> BenchmarkBaseConfig:
     return cfg
 
 
-def list_models() -> list[str]:
+def list_models():
     """Returns all registered model keys."""
     return sorted(MODEL_REGISTRY.keys())
