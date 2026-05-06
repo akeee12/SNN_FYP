@@ -13,7 +13,6 @@ Parameter comparison (k=32, max_lag=64, L=7):
     Baseline FC1:  700*128        = 89,600
     Log buffer:    700*32+224*128 = 51,072  (-43%)
 """
-from __future__ import annotations  # ← add this as the very first line
 
 from configs.adaptiveAxonalDelayV2_config import (
     AdaptiveAxonalDelayV2Config
