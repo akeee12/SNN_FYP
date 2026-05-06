@@ -1,4 +1,4 @@
-# configs/axonal_delay_modelPYTORCH_config.py
+# configs/adaptiveAxonalDelayV2_config.py
 """
 Configuration for AdaptiveAxonalDelayNetV2 — faithful PyTorch
 reproduction of Sun et al. ICASSP 2023.

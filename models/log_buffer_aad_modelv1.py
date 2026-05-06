@@ -26,12 +26,11 @@ from adaptiveAxonalDelayV2 import (
     VanRossumLoss,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # LOG BUFFER — zero parameters, pure temporal structure
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LogBufferAADNetV1(nn.Module):
+class LogBuffer(nn.Module):          # ← FIXED: was LogBufferAADNetV1
     """
     Temporal log-spaced history buffer.
 
@@ -99,9 +98,6 @@ class LogBufferAADNetV1(nn.Module):
         k       = cfg.buffer_size
         max_lag = cfg.buffer_max_lag
 
-        # ── SRM kwargs — matches adaptiveAxonalDelayV2.SRMLayer ───────
-        # SRMLayer takes: tau_s, tau_r, theta_u, alpha_r,
-        #                 tau_rho, scale_rho, kernel_size
         srm_kwargs = dict(
             tau_s       = cfg.tau_s,
             tau_r       = cfg.tau_r,
@@ -114,7 +110,7 @@ class LogBufferAADNetV1(nn.Module):
 
         # ── Log-buffer block (replaces FC1) ───────────────────────────
         self.fc_proj   = nn.Linear(cfg.n_inputs, k, bias=False)
-        self.log_buf   = LogBufferAADNetV1(k, max_lag)
+        self.log_buf   = LogBuffer(k, max_lag)               # ← FIXED
         self.fc_expand = nn.Linear(self.log_buf.output_dim,
                                    cfg.n_hidden, bias=False)
 
@@ -129,14 +125,14 @@ class LogBufferAADNetV1(nn.Module):
         self.fc3    = nn.Linear(cfg.n_hidden, cfg.n_outputs, bias=False)
         self.srm3   = SRMLayer(**srm_kwargs)
 
-        # ── Weight init ×10 — matches SLAYER weightScale=10 ───────────
+        # ── Weight init ×10 ───────────────────────────────────────────
         with torch.no_grad():
             self.fc_proj.weight.data   *= cfg.weight_scale
             self.fc_expand.weight.data *= cfg.weight_scale
             self.fc2.weight.data       *= cfg.weight_scale
             self.fc3.weight.data       *= cfg.weight_scale
 
-        # ── Loss — VanRossumLoss matching V2 exactly ──────────────────
+        # ── Loss ──────────────────────────────────────────────────────
         self.loss_fn    = VanRossumLoss(
             tau_s       = cfg.tau_s,
             kernel_size = cfg.kernel_size,
@@ -214,7 +210,6 @@ class LogBufferAADNetV1(nn.Module):
     def compute_loss(self, spike_out: torch.Tensor,
                      labels: torch.Tensor,
                      cfg=None) -> torch.Tensor:
-        """Matches V2 compute_loss signature exactly."""
         return self.loss_fn(
             spike_out, labels,
             self._tgt_true,
@@ -222,7 +217,6 @@ class LogBufferAADNetV1(nn.Module):
         )
 
     def predict(self, spike_out: torch.Tensor) -> torch.Tensor:
-        """(B, 20, T) → (B,) predicted class."""
         return spike_out.sum(dim=-1).argmax(dim=1)
 
     def clamp_delays(self, thea1: float, thea2: float):
