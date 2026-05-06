@@ -30,9 +30,9 @@ Theta recalibration:
     Recalibrated to theta=2.0 — sits at same relative percentile
     of u_ff distribution as theta=10 does in SLAYER CUDA.
 """
+from __future__ import annotations  # ← add this as the very first line
 
 from configs.base_config import BenchmarkBaseConfig
-from __future__ import annotations  # ← add this as the very first line
 
 class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
 
