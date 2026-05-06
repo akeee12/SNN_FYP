@@ -9,6 +9,7 @@ Usage:
     cfg = get_config("dcls")
     cfg = get_config("adaptive_axonal_delay")
 """
+from __future__ import annotations  # ← add this as the very first line
 
 from configs.dcls_config import DCLSConfig
 from configs.adaptive_axonal_delay_config import AdaptiveAxonalDelayConfig

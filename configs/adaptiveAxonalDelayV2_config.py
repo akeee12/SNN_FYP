@@ -32,7 +32,7 @@ Theta recalibration:
 """
 
 from configs.base_config import BenchmarkBaseConfig
-
+from __future__ import annotations  # ← add this as the very first line
 
 class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
 
