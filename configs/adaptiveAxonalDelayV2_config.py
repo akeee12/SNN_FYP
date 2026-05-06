@@ -49,7 +49,7 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     tau_s       = 1.0
     tau_r       = 1.0
     alpha_r     = 1.0
-    theta_u     = 10.0
+    theta_u     = 2.0
     tau_rho     = 1.0
     scale_rho   = 1.0
     kernel_size = 32
