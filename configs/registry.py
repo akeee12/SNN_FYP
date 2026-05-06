@@ -9,7 +9,7 @@ Usage:
     cfg = get_config("dcls")
     cfg = get_config("adaptive_axonal_delay")
 """
-
+from typing import Dict, Type
 from configs.dcls_config import DCLSConfig
 from configs.adaptive_axonal_delay_config import AdaptiveAxonalDelayConfig
 from configs.base_config import BenchmarkBaseConfig
