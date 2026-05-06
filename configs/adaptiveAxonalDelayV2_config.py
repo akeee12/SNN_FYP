@@ -70,13 +70,26 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     # ── Loss — NumSpikes, scaled from NMNIST yaml ─────────────────────
     # true_rate  = 60/300 = 0.200 → tgt_count_true  = 80
     # false_rate = 10/300 = 0.033 → tgt_count_false = 13
-    _true_rate  = 60 / 300
-    _false_rate = 10 / 300
+  # ── Loss rates — fixed, scale with time_steps dynamically ─────────
+    _true_rate  = 60 / 300    # 0.200
+    _false_rate = 10 / 300    # 0.033
 
-    tgt_count_true  = max(1, round(_true_rate  * time_steps))   # 80
-    tgt_count_false = max(0, round(_false_rate * time_steps))   # 13
+    target_true  = 0.8
+    target_false = 0.0
+
     tgt_region_start = 0
-    tgt_region_stop  = time_steps
+
+    @property
+    def tgt_count_true(self):
+        return max(1, round(self._true_rate * self.time_steps))
+
+    @property
+    def tgt_count_false(self):
+        return max(0, round(self._false_rate * self.time_steps))
+
+    @property
+    def tgt_region_stop(self):
+        return self.time_steps
 
     # ── Optimiser — Pengfei uses lr=0.1, we keep 0.001 for stability ──
     optimizer     = "nadam"
@@ -96,3 +109,4 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     epochs           = 500
     save_checkpoints = True
     checkpoint_every = 50
+    
