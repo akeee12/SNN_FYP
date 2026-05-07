@@ -46,10 +46,10 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     Ts         = 1.0
 
     # ── Neuron parameters ─────────────────────────────────────────────
-    tau_s       = 1.0
+    tau_s       = 10.0
     tau_r       = 1.0
     alpha_r     = 1.0
-    theta_u     = 2.0
+    theta_u     = 0.5
     tau_rho     = 1.0
     scale_rho   = 1.0
     kernel_size = 32
