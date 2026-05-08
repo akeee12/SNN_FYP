@@ -234,7 +234,7 @@ def train(cfg, results_dir: str) -> dict:
             loss   = model.compute_loss(output, labels, cfg)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=1.0)
+                model.parameters(), max_norm=10.0)
             optimizer.step()
             delay_sched.step(model, epoch)
 

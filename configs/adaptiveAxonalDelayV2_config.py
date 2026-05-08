@@ -47,7 +47,7 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
 
     # ── Neuron parameters ─────────────────────────────────────────────
     tau_s       = 10.0
-    tau_r       = 1.0
+    tau_r       = 10.0
     alpha_r     = 1.0
     theta_u     = 0.2
     tau_rho     = 1.0
