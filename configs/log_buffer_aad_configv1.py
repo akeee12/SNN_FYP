@@ -42,6 +42,12 @@ class LogBufferAADConfigv1(AdaptiveAxonalDelayV2Config):
                            # ── ADD THESE TWO LINES ───────────────────────────────────────────
     target_true  = 0.8
     target_false = 0.0
+     # ── Recalibrated for log buffer — confirmed from sweep ────────────
+    # Log buffer fc_proj+fc_expand produces u_ff max ~26
+    # vs AAD fc1 produces u_ff max ~8
+    # theta_u=0.2 (AAD value) → SATURATED (rate=0.48)
+    # theta_u=5.0             → OK        (rate=0.04)
+    theta_u = 5.0
 
     # ── Parameter count reference ─────────────────────────────────────
     # k=16, L=7: 700*16 + 112*128 = 11,200 + 14,336 = 25,536  (-71%)
