@@ -33,7 +33,7 @@ MODEL_REGISTRY = {
     "three_factor_delay"    : ThreeFactorDelayConfig,
     "aad_v2"     : AdaptiveAxonalDelayV2Config,
     "log_buffer" : LogBufferAADConfigv1,
-    "aad_snnTorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
+    "aad_snntorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
 
 
 }
