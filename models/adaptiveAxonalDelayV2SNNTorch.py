@@ -193,18 +193,19 @@ class AdaptiveAxonalDelayNetV2SNNTorch(nn.Module):
             spk3, syn3, mem3 = self.lif3(cur3, syn3, mem3)
             spk3_list.append(spk3)
 
-        return torch.stack(spk3_list, dim=2)      # (B, 20, T)
+        return torch.stack(spk3_list, dim=0)
 
     def compute_loss(self, spike_out, labels, cfg=None):
+    # spike_out: (T, B, 20)
         loss_fn = SF.mse_count_loss(
             correct_rate   = self._tgt_true  / self._T,
             incorrect_rate = self._tgt_false / self._T,
         )
         return loss_fn(spike_out, labels)
 
-    def predict(self, spike_out: torch.Tensor) -> torch.Tensor:
-        """(B, 20, T) → (B,)"""
-        return spike_out.sum(dim=-1).argmax(dim=-1)
+    def predict(self, spike_out):
+        # spike_out: (T, B, 20) → sum over T → (B, 20) → argmax
+        return spike_out.sum(dim=0).argmax(dim=-1)
 
     def clamp_delays(self, thea1: float, thea2: float):
         self.delay1.clamp_delays(thea1)
