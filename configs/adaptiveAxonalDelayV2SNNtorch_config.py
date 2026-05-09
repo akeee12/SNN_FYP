@@ -14,9 +14,9 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     # ── Neuron parameters — confirmed from Pengfei SLAYER config ──────
     # Pengfei: tauSr=1.0, tauRef=1.0, theta=10, scaleRef=1
     # snnTorch Synaptic uses alpha=exp(-1/tau_s), beta=exp(-1/tau_r)
-    tau_s      = 1.0
-    tau_r      = 1.0
-    theta_u    = 10.0
+    tau_s   = 20.0   # alpha = 0.951
+    tau_r   = 20.0   # beta  = 0.951
+    theta_u = 1.0
     alpha_r    = 1.0
     tau_rho    = 1.0
     scale_rho  = 1.0
