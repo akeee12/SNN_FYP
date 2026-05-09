@@ -5,6 +5,7 @@ from configs.axonal_delay_modelPYTORCH_config import AdaptiveAxonalDelayPyTorchC
 from configs.log_buffer_aad_config import LogBufferAADConfig
 from configs.adaptiveAxonalDelayV2_config import AdaptiveAxonalDelayV2Config
 from configs.log_buffer_aad_configv1 import LogBufferAADConfigv1
+from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
 from configs.registry import get_config, list_models, MODEL_REGISTRY
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "MODEL_REGISTRY",
     "LogBufferAADConfig",
     "AdaptiveAxonalDelayV2Config",
-    "LogBufferAADConfigv1"
+    "LogBufferAADConfigv1",
+    "AdaptiveAxonalDelayNetV2SNNTorch",
 ]
