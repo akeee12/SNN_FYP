@@ -195,21 +195,12 @@ class AdaptiveAxonalDelayNetV2SNNTorch(nn.Module):
 
         return torch.stack(spk3_list, dim=2)      # (B, 20, T)
 
-    def compute_loss(
-        self,
-        spike_out: torch.Tensor,   # (B, 20, T)
-        labels:    torch.Tensor,   # (B,)
-        cfg=None,
-    ) -> torch.Tensor:
-        # mse_count_loss matches Pengfei's spikeRate loss intent
-        # correct_rate  = tgt_true  / T
-        # incorrect_rate = tgt_false / T
-        return SF.mse_count_loss(
-            spike_out,
-            labels,
+    def compute_loss(self, spike_out, labels, cfg=None):
+        loss_fn = SF.mse_count_loss(
             correct_rate   = self._tgt_true  / self._T,
             incorrect_rate = self._tgt_false / self._T,
         )
+        return loss_fn(spike_out, labels)
 
     def predict(self, spike_out: torch.Tensor) -> torch.Tensor:
         """(B, 20, T) → (B,)"""
