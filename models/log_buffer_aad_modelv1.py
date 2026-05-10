@@ -136,8 +136,8 @@ class LogBufferAADNetV1(nn.Module):
             # matches AAD activation magnitude closest
             self.fc_proj.weight.data   *= 1.5
             self.fc_expand.weight.data *= 1.5
-            self.fc2.weight.data       *= cfg.weight_scale
-            self.fc3.weight.data       *= cfg.weight_scale
+            self.fc2.weight.data       *= 1.5
+            self.fc3.weight.data       *=  1.5
 
         # ── Loss ──────────────────────────────────────────────────────
         self.loss_fn    = VanRossumLoss(
