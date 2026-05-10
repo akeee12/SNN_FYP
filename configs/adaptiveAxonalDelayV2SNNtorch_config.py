@@ -37,8 +37,8 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     # tau_mem=10 → beta =0.905  (membrane, gives ~10-step integration window)
     #
     # If neurons still don't fire, reduce tau_mem toward 5 or lower threshold.
-    tau_syn = 2.0    # alpha ≈ 0.607
-    tau_mem = 10.0   # beta  ≈ 0.905
+    tau_s = 2.0    # alpha ≈ 0.607
+    tau_r = 10.0   # beta  ≈ 0.905
  
     # ── Neuron threshold ──────────────────────────────────────────────
     # Must be reachable given weight_scale and input sparsity.
