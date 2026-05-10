@@ -321,7 +321,7 @@ def main():
     parser.add_argument("--datasets-path", type=str, default=None)
     args = parser.parse_args()
 
-    cfg = get_config("aad_v2")
+    cfg = get_config("aad_snntorch")
     if args.epochs        is not None: cfg.epochs        = args.epochs
     if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
 
