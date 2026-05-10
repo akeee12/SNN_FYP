@@ -60,8 +60,8 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
  
     # ── Delay scheduler ───────────────────────────────────────────────
     delay_init_cap      = 64    # initial max delay (timesteps)
-    delay_adapt_start   = 10    # start adapting caps after this many epochs
-    delay_adapt_window  = 20    # check every N delay_sched.step() calls
+    delay_adapt_start   = 125   # start adapting caps after this many epochs
+    delay_adapt_window  = 75    # check every N delay_sched.step() calls
     delay_percentile    = 0.95
     delay_expand_margin = 5     # expand cap if p95 > (cap - margin)
  
@@ -77,7 +77,7 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     # If training is slow, try 0.02. Pengfei's lr=0.1 is tuned for SLAYER.
     optimizer     = "nadam"
     lr            = 0.01
-    lr_milestones = [200, 350]   # decay at these epochs (for 500-epoch run)
+    lr_milestones = [400]   # decay at these epochs (for 500-epoch run)
     lr_gamma      = 0.5
  
     # ── Dataloader ────────────────────────────────────────────────────
