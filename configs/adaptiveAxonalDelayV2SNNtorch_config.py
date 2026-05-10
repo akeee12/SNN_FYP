@@ -48,6 +48,7 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     #   cur ≈ 0.5 * (10/700)^0.5 * 700 * 10/700 ≈ 0.5 * 0.12 * 10 = 0.6
     # So threshold=0.5 is reachable; adjust together with weight_scale.
     threshold = 0.5
+    threshold_out = 2.0    # output layer fires more selectively
  
     # ── Weight initialisation ─────────────────────────────────────────
     # Applied as a multiplier on top of Xavier uniform.

@@ -151,7 +151,7 @@ class AdaptiveAxonalDelayNetV2SNNTorch(nn.Module):
         )
         self.lif3 = snn.Synaptic(
             alpha=alpha, beta=beta,
-            threshold=cfg.threshold,
+            threshold=cfg.threshold_out,
             learn_threshold=False,
             spike_grad=surrogate,
             reset_mechanism="subtract",
