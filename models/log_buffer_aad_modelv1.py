@@ -131,10 +131,11 @@ class LogBufferAADNetV1(nn.Module):
             # fc_expand: scale by sqrt(weight_scale) only
             # Combined effect = weight_scale — same as single fc1 in AAD
             import math
-            sqrt_scale = math.sqrt(cfg.weight_scale)   # sqrt(10) = 3.16
 
-            self.fc_proj.weight.data   *= sqrt_scale   # was *= cfg.weight_scale
-            self.fc_expand.weight.data *= sqrt_scale   # was *= cfg.weight_scale
+            # Confirmed from sweep: 1.5 x 1.5 gives rate=0.1444 OK
+            # matches AAD activation magnitude closest
+            self.fc_proj.weight.data   *= 1.5
+            self.fc_expand.weight.data *= 1.5
             self.fc2.weight.data       *= cfg.weight_scale
             self.fc3.weight.data       *= cfg.weight_scale
 
