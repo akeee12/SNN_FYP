@@ -290,7 +290,7 @@ def train(cfg, results_dir):
         "hyperparams" : {
             "tau_s"    : cfg.tau_s,
             "tau_r"    : cfg.tau_r,
-            "theta_u"  : cfg.theta_u,
+            "theta_u"  : cfg.threshold,
             "lr"       : cfg.lr,
             "batch_size": cfg.batch_size,
             "epochs"   : cfg.epochs,
