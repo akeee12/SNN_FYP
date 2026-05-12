@@ -156,7 +156,7 @@ def train(cfg, results_dir, resume_path=None):
     print(f"{'='*65}\n")
 
     os.makedirs(results_dir, exist_ok=True)
-    set_seed(cfg.seed)
+    #set_seed(cfg.seed)
 
     device = torch.device(
         cfg.device if torch.cuda.is_available() else "cpu"
