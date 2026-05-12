@@ -35,7 +35,7 @@ MODEL_REGISTRY = {
     "aad_v2"     : AdaptiveAxonalDelayV2Config,
     "log_buffer" : LogBufferAADConfigv1,
     "aad_snntorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
-    "LogBufferAADSNNTorch":  LogBufferSNNTorchConfig
+    "AAD_LogBuffer":  LogBufferSNNTorchConfig
 
 
 }
