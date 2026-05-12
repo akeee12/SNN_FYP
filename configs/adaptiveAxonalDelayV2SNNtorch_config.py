@@ -60,8 +60,8 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
  
     # ── Delay scheduler ───────────────────────────────────────────────
     delay_init_cap      = 64    # initial max delay (timesteps)
-    delay_adapt_start   = 125   # start adapting caps after this many epochs
-    delay_adapt_window  = 75    # check every N delay_sched.step() calls
+    delay_adapt_start   = 250   # start adapting caps after this many epochs
+    delay_adapt_window  = 125    # check every N delay_sched.step() calls
     delay_percentile    = 0.95
     delay_expand_margin = 5     # expand cap if p95 > (cap - margin)
  

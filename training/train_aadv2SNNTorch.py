@@ -113,22 +113,36 @@ class DelayScheduler:
 
         self.update1 += 1
         self.update2 += 1
-        stats = model.get_delay_stats()
+
+        d1 = model.delay1.delay.detach().cpu()
+        d2 = model.delay2.delay.detach().cpu()
+
+        # FIX: thea tracks max of current delays — matches Pengfei exactly
+        thea1_current = torch.floor(d1).max().item()
+        thea2_current = torch.floor(d2).max().item()
+
+        # sorted[108] out of 128 = 84th percentile — matches Pengfei's sorted1[108]
+        sorted1 = torch.sort(torch.floor(d1))[0]
+        sorted2 = torch.sort(torch.floor(d2))[0]
 
         if self.update1 > self.adapt_window:
-            if stats["delay1"]["p95"] > (self.thea1 - self.expand_margin):
-                self.thea1 += 1.0
-            self.update1 = 0
+            if sorted1[108] > (thea1_current - self.expand_margin):
+                thea1_current += 1.0
+                self.update1 = 0
 
         if self.update2 > self.adapt_window:
-            if stats["delay2"]["p95"] > (self.thea2 - self.expand_margin):
-                self.thea2 += 1.0
-            self.update2 = 0
+            if sorted2[108] > (thea2_current - self.expand_margin):
+                thea2_current += 1.0
+                self.update2 = 0
+
+        # Update stored caps
+        self.thea1 = thea1_current
+        self.thea2 = thea2_current
 
         model.clamp_delays(self.thea1, self.thea2)
 
     def get_caps(self):
-        return self.thea1, self.thea2
+        return self.thea1, self.thea22
 
     def state_dict(self):
         return {"thea1": self.thea1, "thea2": self.thea2,
