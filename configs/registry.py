@@ -20,6 +20,7 @@ from configs.three_factor_delay_config import ThreeFactorDelayConfig
 from configs.adaptiveAxonalDelayV2_config import AdaptiveAxonalDelayV2Config
 from configs.log_buffer_aad_configv1 import LogBufferAADConfigv1
 from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
+from configs.log_buffer_snntorch_config import LogBufferSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -34,6 +35,7 @@ MODEL_REGISTRY = {
     "aad_v2"     : AdaptiveAxonalDelayV2Config,
     "log_buffer" : LogBufferAADConfigv1,
     "aad_snntorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
+    "LogBufferAADSNNTorch":  LogBufferSNNTorchConfig
 
 
 }
