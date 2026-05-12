@@ -77,7 +77,7 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     # If training is slow, try 0.02. Pengfei's lr=0.1 is tuned for SLAYER.
     optimizer     = "nadam"
     lr            = 0.001
-    lr_milestones = [100, 200]   # decay at these epochs (for 500-epoch run)
+    lr_milestones = [20, 50, 100]   # decay at these epochs (for 500-epoch run)
     lr_gamma      = 0.5
  
     # ── Dataloader ────────────────────────────────────────────────────
