@@ -55,11 +55,11 @@ class AdaptiveAxonalDelayV2Config(BenchmarkBaseConfig):
     kernel_size = 32
 
     # ── Delay scheduler ───────────────────────────────────────────────
-    delay_init_cap      = 64
-    delay_adapt_start   = 250
-    delay_adapt_window  = 150
+    delay_init_cap      = 16
+    delay_adapt_start   = 10
+    delay_adapt_window  = 50
     delay_percentile    = 0.95
-    delay_expand_margin = 5
+    delay_expand_margin = 3
 
     # ── Loss — plain values, recomputed in __init__ ───────────────────
     target_true      = 0.8

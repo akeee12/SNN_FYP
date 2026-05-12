@@ -233,6 +233,7 @@ def train(cfg, results_dir):
         test_accs.append(test_acc)
         epoch_times.append(epoch_time)
         peak_mems.append(peak_mem)
+        stats = model.get_delay_stats()
 
         if test_acc > best_acc:
             best_acc = test_acc
@@ -255,6 +256,8 @@ def train(cfg, results_dir):
             f"Mem: {peak_mem:.1f}MB | "
             f"Time: {epoch_time:.1f}s | "
             f"Caps: [{thea1:.0f},{thea2:.0f}]"
+            f"d1_p95: {stats['delay1']['p95']:.2f} | "    # ← ADD THIS
+            f"d2_p95: {stats['delay2']['p95']:.2f}"        # ← ADD THIS
         )
 
         logger.log_epoch(cfg.model_name, epoch + 1,
