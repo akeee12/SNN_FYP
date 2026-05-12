@@ -142,7 +142,7 @@ class DelayScheduler:
         model.clamp_delays(self.thea1, self.thea2)
 
     def get_caps(self):
-        return self.thea1, self.thea22
+        return self.thea1, self.thea2
 
     def state_dict(self):
         return {"thea1": self.thea1, "thea2": self.thea2,
