@@ -73,65 +73,75 @@ def gaussian_spike(u, threshold=1.0, sigma=0.5, scale=1.0):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SynapticDelay(nn.Module):
-    """
-    Learnable synaptic delay — delays input current.
-
-    Synaptic delays model the time for neurotransmitters to
-    diffuse across the synaptic cleft and activate receptors.
-
-    Per-synapse delay: each (pre, post) connection has its own delay.
-    Shape: (n_post, n_pre) — one delay per weight
-
-    Args:
-        n_pre  : number of presynaptic neurons
-        n_post : number of postsynaptic neurons
-        max_delay: maximum delay in timesteps
-    """
-
     def __init__(self, n_pre: int, n_post: int, max_delay: int = 20):
         super().__init__()
         self.n_pre     = n_pre
         self.n_post    = n_post
         self.max_delay = max_delay
-
-        # One delay per synapse — initialise small
-        self.delay = nn.Parameter(
+        self.delay     = nn.Parameter(
             torch.zeros(n_post, n_pre).uniform_(0, max_delay / 4)
         )
 
+    # ── REPLACE THIS ENTIRE METHOD ────────────────────────────────────────
+    # OLD (slow — Python loop over N_pre neurons):
+    #
+    #   def forward(self, x):
+    #       B, T, N = x.shape
+    #       d       = self.delay.mean(dim=0).clamp(0, self.max_delay)
+    #       d_floor = d.floor().long()
+    #       d_ceil  = d.ceil().long()
+    #       alpha   = (d - d.floor()).view(1, 1, -1)
+    #       out_floor = torch.zeros_like(x)
+    #       out_ceil  = torch.zeros_like(x)
+    #       for i in range(N):                    # <-- THE SLOW LOOP
+    #           sf = d_floor[i].item()
+    #           ...
+    #       return (1 - alpha) * out_floor + alpha * out_ceil
+    #
+    # ── NEW (vectorised — identical strategy to AxonalDelay) ─────────────
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Apply per-synapse delays to input.
+        Vectorised synaptic delay — no Python loop over neurons.
+
+        Note on per-synapse vs per-pre-neuron:
+            self.delay shape is (n_post, n_pre).
+            We reduce to per-pre-neuron by averaging over n_post
+            (same as the original implementation).
+            This keeps the output shape (B, T, n_pre) which is what
+            the downstream FC layer expects.
+            True per-synapse delay would need (B, T, n_post, n_pre)
+            — 128x more memory for layer 1.
 
         Args:
-            x: (B, T, n_pre) — input current over time
+            x: (B, T, n_pre) — input current after FC projection
         Returns:
-            delayed: (B, T, n_pre) — delayed input
-                     (delays applied per pre-neuron, averaged over post)
+            delayed: (B, T, n_pre)
         """
         B, T, N = x.shape
 
-        # Use mean delay per pre-neuron for efficiency
-        # (full per-synapse delay would require (B, T, n_post, n_pre))
-        d       = self.delay.mean(dim=0).clamp(0, self.max_delay)  # (n_pre,)
-        d_floor = d.floor().long()
-        d_ceil  = d.ceil().long()
-        alpha   = (d - d.floor()).view(1, 1, -1)  # (1, 1, n_pre)
+        # Reduce (n_post, n_pre) → (n_pre,) by averaging over post
+        d       = self.delay.mean(dim=0).clamp(0, self.max_delay)  # (N,)
+        d_floor = d.floor().long()                                   # (N,)
+        d_ceil  = d.ceil().long()                                    # (N,)
+        alpha   = (d - d.floor()).view(1, 1, N)                      # (1,1,N)
 
-        out_floor = torch.zeros_like(x)
-        out_ceil  = torch.zeros_like(x)
+        # ── Pad left on time axis ─────────────────────────────────────────
+        pad    = torch.zeros(B, self.max_delay, N,
+                             device=x.device, dtype=x.dtype)
+        padded = torch.cat([pad, x], dim=1)                # (B, max_d+T, N)
 
-        for i in range(N):
-            sf = d_floor[i].item()
-            sc = d_ceil[i].item()
-            if sf > 0 and sf < T:
-                out_floor[:, sf:, i] = x[:, :T-sf, i]
-            elif sf == 0:
-                out_floor[:, :, i] = x[:, :, i]
-            if sc > 0 and sc < T:
-                out_ceil[:, sc:, i] = x[:, :T-sc, i]
-            elif sc == 0:
-                out_ceil[:, :, i] = x[:, :, i]
+        # ── Build gather indices ──────────────────────────────────────────
+        t_base  = torch.arange(T, device=x.device).view(1, T, 1)
+        start_f = (self.max_delay - d_floor).clamp(0).view(1, 1, N)
+        start_c = (self.max_delay - d_ceil ).clamp(0).view(1, 1, N)
+
+        idx_f   = (t_base + start_f).expand(B, T, N)
+        idx_c   = (t_base + start_c).expand(B, T, N)
+
+        # ── Gather ────────────────────────────────────────────────────────
+        out_floor = torch.gather(padded, dim=1, index=idx_f)
+        out_ceil  = torch.gather(padded, dim=1, index=idx_c)
 
         return (1 - alpha) * out_floor + alpha * out_ceil
 
@@ -143,7 +153,6 @@ class SynapticDelay(nn.Module):
             "p95" : torch.quantile(d.flatten(), 0.95).item(),
         }
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # AXONAL DELAY
 # Delays the OUTPUT SPIKE after it leaves the neuron
@@ -151,13 +160,6 @@ class SynapticDelay(nn.Module):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AxonalDelay(nn.Module):
-    """
-    Learnable axonal delay — delays output spikes.
-
-    Per-neuron delay: each neuron has one axonal delay.
-    Shape: (n_neurons,)
-    """
-
     def __init__(self, n_neurons: int, max_delay: int = 20):
         super().__init__()
         self.max_delay = max_delay
@@ -165,33 +167,81 @@ class AxonalDelay(nn.Module):
             torch.zeros(n_neurons).uniform_(0, max_delay / 4)
         )
 
+    # ── REPLACE THIS ENTIRE METHOD ────────────────────────────────────────
+    # OLD (slow — Python loop over N neurons):
+    #
+    #   def forward(self, spikes):
+    #       B, T, N = spikes.shape
+    #       d       = self.delay.clamp(0, self.max_delay)
+    #       d_floor = d.floor().long()
+    #       d_ceil  = d.ceil().long()
+    #       alpha   = (d - d.floor()).view(1, 1, -1)
+    #       out_floor = torch.zeros_like(spikes)
+    #       out_ceil  = torch.zeros_like(spikes)
+    #       for i in range(N):                    # <-- THE SLOW LOOP
+    #           sf = d_floor[i].item()
+    #           sc = d_ceil[i].item()
+    #           if sf > 0 and sf < T:
+    #               out_floor[:, sf:, i] = spikes[:, :T-sf, i]
+    #           elif sf == 0:
+    #               out_floor[:, :, i] = spikes[:, :, i]
+    #           if sc > 0 and sc < T:
+    #               out_ceil[:, sc:, i] = spikes[:, :T-sc, i]
+    #           elif sc == 0:
+    #               out_ceil[:, :, i] = spikes[:, :, i]
+    #       return (1 - alpha) * out_floor + alpha * out_ceil
+    #
+    # ── NEW (vectorised — no Python loop) ────────────────────────────────
+
     def forward(self, spikes: torch.Tensor) -> torch.Tensor:
         """
+        Vectorised axonal delay — no Python loop over neurons.
+
+        Strategy:
+            1. Pad the TIME dimension on the LEFT with max_delay zeros
+               so that any shift stays in-bounds.
+            2. For each neuron i, the delayed signal is:
+                   padded[:, (max_delay - d[i]) : (max_delay - d[i] + T), i]
+               i.e. we just change WHERE we start slicing, not the data.
+            3. Use torch.gather on the time axis to do all neurons at once.
+
         Args:
             spikes: (B, T, N)
         Returns:
             delayed: (B, T, N)
         """
         B, T, N = spikes.shape
-        d       = self.delay.clamp(0, self.max_delay)
-        d_floor = d.floor().long()
-        d_ceil  = d.ceil().long()
-        alpha   = (d - d.floor()).view(1, 1, -1)
 
-        out_floor = torch.zeros_like(spikes)
-        out_ceil  = torch.zeros_like(spikes)
+        d       = self.delay.clamp(0, self.max_delay)   # (N,)
+        d_floor = d.floor().long()                       # (N,)
+        d_ceil  = d.ceil().long()                        # (N,)
+        alpha   = (d - d.floor()).view(1, 1, N)          # (1, 1, N)
 
-        for i in range(N):
-            sf = d_floor[i].item()
-            sc = d_ceil[i].item()
-            if sf > 0 and sf < T:
-                out_floor[:, sf:, i] = spikes[:, :T-sf, i]
-            elif sf == 0:
-                out_floor[:, :, i] = spikes[:, :, i]
-            if sc > 0 and sc < T:
-                out_ceil[:, sc:, i] = spikes[:, :T-sc, i]
-            elif sc == 0:
-                out_ceil[:, :, i] = spikes[:, :, i]
+        # ── Pad left on time axis ─────────────────────────────────────────
+        # (B, T, N) → (B, max_delay + T, N)
+        pad     = torch.zeros(B, self.max_delay, N,
+                              device=spikes.device, dtype=spikes.dtype)
+        padded  = torch.cat([pad, spikes], dim=1)        # (B, max_d+T, N)
+
+        # ── Build gather index for floor and ceil delays ──────────────────
+        # For neuron i with floor delay sf:
+        #   we want timesteps  [max_delay-sf, max_delay-sf+1, ..., max_delay-sf+T-1]
+        # Shape of index: (B, T, N)
+
+        # t_base: (1, T, 1) — base time indices 0..T-1
+        t_base  = torch.arange(T, device=spikes.device).view(1, T, 1)
+
+        # start_f[i] = max_delay - d_floor[i]  →  shape (1, 1, N)
+        start_f = (self.max_delay - d_floor).clamp(0).view(1, 1, N)
+        start_c = (self.max_delay - d_ceil ).clamp(0).view(1, 1, N)
+
+        # idx shape: (1, T, N) → broadcast to (B, T, N) inside gather
+        idx_f   = (t_base + start_f).expand(B, T, N)    # (B, T, N)
+        idx_c   = (t_base + start_c).expand(B, T, N)    # (B, T, N)
+
+        # ── Gather ────────────────────────────────────────────────────────
+        out_floor = torch.gather(padded, dim=1, index=idx_f)  # (B, T, N)
+        out_ceil  = torch.gather(padded, dim=1, index=idx_c)  # (B, T, N)
 
         return (1 - alpha) * out_floor + alpha * out_ceil
 
@@ -202,7 +252,6 @@ class AxonalDelay(nn.Module):
             "mean": d.mean().item(),
             "p95" : torch.quantile(d, 0.95).item(),
         }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LIF NEURON WITH SYNAPTIC CURRENT
