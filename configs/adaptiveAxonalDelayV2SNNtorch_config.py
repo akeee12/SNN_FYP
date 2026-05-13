@@ -30,7 +30,6 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     threshold     = 10.0
     threshold_out = 10.0
     weight_scale  = 10.0
-    lr            = 0.1
 
 
     # ── Surrogate ─────────────────────────────────────────────────────
