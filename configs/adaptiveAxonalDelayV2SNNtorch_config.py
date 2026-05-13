@@ -51,7 +51,7 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
 
     # ── Optimiser — match Pengfei exactly ────────────────────────────
     optimizer     = "nadam"
-    lr            = 0.1        # Pengfei lr=0.1
+    lr            = 0.01        # Pengfei lr=0.1
     lr_milestones = [800]      # Pengfei milestone=800
     lr_gamma      = 0.5
     epochs        = 1000       # Pengfei trains 1000 epochs
