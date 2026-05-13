@@ -25,11 +25,13 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     time_steps = 400
 
     # ── Neuron — match Pengfei SLAYER config exactly ──────────────────
-    tau_s         = 1.0    # tauSr=1.0
-    tau_r         = 1.0    # tauRef=1.0
-    threshold     = 10.0   # theta=10
+    tau_s = 2.0   # alpha = 0.607  ← must be > beta
+    tau_r = 1.0   # beta  = 0.368  ← must be < alpha
+    threshold     = 10.0
     threshold_out = 10.0
-    weight_scale  = 10.0   # SLAYER dense default
+    weight_scale  = 10.0
+    lr            = 0.1
+
 
     # ── Surrogate ─────────────────────────────────────────────────────
     surrogate_slope = 25
