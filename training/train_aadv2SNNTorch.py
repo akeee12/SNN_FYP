@@ -209,8 +209,10 @@ def train(cfg, results_dir):
  
     optimizer = torch.optim.NAdam(
         model.parameters(),
-        lr=cfg.lr, betas=(0.9, 0.999), eps=1e-8,
-        weight_decay=getattr(cfg, "weight_decay", 1e-4),  # FIX 3
+        lr           = cfg.lr,
+        betas        = (0.9, 0.999),
+        eps          = 1e-8,
+        weight_decay = getattr(cfg, "weight_decay", 0.0),
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=cfg.lr_milestones, gamma=cfg.lr_gamma,
