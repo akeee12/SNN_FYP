@@ -366,18 +366,17 @@ class ThreeFactorDelayNet(nn.Module):
 
         # ── Layer 1 ───────────────────────────────────────────────────────
         self.fc1    = nn.Linear(cfg.n_inputs,  cfg.n_hidden, bias=False)
-        self.sdel1  = SynapticDelay(
-            cfg.n_inputs, cfg.n_hidden,
-            max_delay=cfg.max_synaptic_delay)
+        self.sdel1 = SynapticDelay(cfg.n_inputs, cfg.n_hidden,
+                                    max_delay=cfg.max_synaptic_delay)
         self.lif1   = LIFNeuron(**lif_kwargs)
         self.adel1  = AxonalDelay(
             cfg.n_hidden, max_delay=cfg.max_axonal_delay)
 
         # ── Layer 2 ───────────────────────────────────────────────────────
         self.fc2    = nn.Linear(cfg.n_hidden,  cfg.n_hidden, bias=False)
-        self.sdel2  = SynapticDelay(
-            cfg.n_hidden, cfg.n_hidden,
-            max_delay=cfg.max_synaptic_delay)
+        # sdel2 delays 128-dim input — shape (n_hidden, n_hidden)  
+        self.sdel2 = SynapticDelay(cfg.n_hidden, cfg.n_hidden,
+                                    max_delay=cfg.max_synaptic_delay)
         self.lif2   = LIFNeuron(**lif_kwargs)
         self.adel2  = AxonalDelay(
             cfg.n_hidden, max_delay=cfg.max_axonal_delay)
@@ -389,37 +388,23 @@ class ThreeFactorDelayNet(nn.Module):
         self.drop = nn.Dropout(cfg.dropout_p) \
                     if cfg.dropout_p > 0 else nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, T, 700)
-        Returns:
-            out: (B, 20) summed spike counts
-        """
-        # ── Layer 1 ───────────────────────────────────────────────────────
-        # FC: (B, T, 700) → (B, T, 128)
-        x = self.fc1(x)
-
-        # Synaptic delay on input current
-        x = self.sdel1(x)                    # (B, T, 128)
-
-        # LIF neurons
-        x = self.lif1(x)                     # (B, T, 128) spikes
-
-        # Axonal delay on output spikes
-        x = self.adel1(x)                    # (B, T, 128)
+    # in ThreeFactorDelayNet.forward
+    def forward(self, x):
+        # Layer 1 — delay the INPUT before projection
+        x = self.sdel1(x)        # (B, T, 700) delayed input
+        x = self.fc1(x)          # (B, T, 128)
+        x = self.lif1(x)         # (B, T, 128) spikes
+        x = self.adel1(x)        # (B, T, 128) delayed spikes
         x = self.drop(x)
 
-        # ── Layer 2 ───────────────────────────────────────────────────────
-        x = self.fc2(x)                      # (B, T, 128)
-        x = self.sdel2(x)                    # (B, T, 128)
-        x = self.lif2(x)                     # (B, T, 128) spikes
-        x = self.adel2(x)                    # (B, T, 128)
+        # Layer 2
+        x = self.sdel2(x)        # (B, T, 128)
+        x = self.fc2(x)          # (B, T, 128)
+        x = self.lif2(x)         # (B, T, 128)
+        x = self.adel2(x)        # (B, T, 128)
         x = self.drop(x)
 
-        # ── Readout ───────────────────────────────────────────────────────
-        x = self.fc_out(x)                   # (B, T, 20)
-        return x.sum(dim=1)                  # (B, 20) sum over T
+        return self.fc_out(x).sum(dim=1)
 
     def get_delay_stats(self) -> dict:
         return {
