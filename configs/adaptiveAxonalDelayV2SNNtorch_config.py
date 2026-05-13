@@ -27,8 +27,8 @@ class AdaptiveAxonalDelayV2ConfigSNNTorch(BenchmarkBaseConfig):
     # ── Neuron — match Pengfei SLAYER config exactly ──────────────────
     tau_s = 2.0   # alpha = 0.607  ← must be > beta
     tau_r = 1.0   # beta  = 0.368  ← must be < alpha
-    threshold     = 10.0
-    threshold_out = 10.0
+    threshold     = 1.0
+    threshold_out = 1.0
     weight_scale  = 10.0
 
 
