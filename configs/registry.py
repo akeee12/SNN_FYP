@@ -22,6 +22,7 @@ from configs.log_buffer_aad_configv1 import LogBufferAADConfigv1
 from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
 from configs.log_buffer_snntorch_config import LogBufferSNNTorchConfig
 from configs.cadlif_config import cAdLIFConfig
+from configs.dhlif_config import DHLIFConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -37,7 +38,8 @@ MODEL_REGISTRY = {
     "log_buffer" : LogBufferAADConfigv1,
     "aad_snntorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
     "log_buffer_snntorch"   : LogBufferSNNTorchConfig,
-    "cadlif": cAdLIFConfig
+    "cadlif": cAdLIFConfig,
+    "dhlif": DHLIFConfig
 
 }
 
