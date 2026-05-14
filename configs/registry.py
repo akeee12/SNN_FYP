@@ -23,6 +23,7 @@ from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2Co
 from configs.log_buffer_snntorch_config import LogBufferSNNTorchConfig
 from configs.cadlif_config import cAdLIFConfig
 from configs.dhlif_config import DHLIFConfig
+from configs.ssmConfig import EventSSMConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -39,7 +40,8 @@ MODEL_REGISTRY = {
     "aad_snntorch" : AdaptiveAxonalDelayV2ConfigSNNTorch,
     "log_buffer_snntorch"   : LogBufferSNNTorchConfig,
     "cadlif": cAdLIFConfig,
-    "dhlif": DHLIFConfig
+    "dhlif": DHLIFConfig,
+    "event_ssm": EventSSMConfig
 
 }
 
