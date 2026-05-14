@@ -41,7 +41,7 @@ MODEL_REGISTRY = {
     "log_buffer_snntorch"   : LogBufferSNNTorchConfig,
     "cadlif": cAdLIFConfig,
     "dhlif": DHLIFConfig,
-    "event_ssm_model": EventSSMConfig
+    "event_ssm": EventSSMConfig
 
 }
 
