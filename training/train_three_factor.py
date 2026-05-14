@@ -2,13 +2,12 @@
 """
 Training script for Three-Factor Delay SNN on SHD.
 Based on: Vassallo & Taherinejad, arXiv:2601.00668, Jan 2026
-"Three factor delay learning rules for spiking neural networks"
 
 Usage:
     python training/train_three_factor_delay.py
     python training/train_three_factor_delay.py --epochs 1000
     python training/train_three_factor_delay.py --datasets-path /path/to/shd
-    python training/train_three_factor_delay.py --resume results/three_factor_delay/ThreeFactorDelay_best.pt
+    python training/train_three_factor_delay.py --resume results/three_factor_delay/v1/ThreeFactorDelay_best.pt
 """
 
 import os
@@ -32,14 +31,35 @@ from experiments.results_logger import ResultsLogger
 from three_factor_delay_model import ThreeFactorDelayNet
 
 
+# ── Versioning ────────────────────────────────────────────────────────────────
+
+def get_versioned_dir(base_dir: str) -> tuple:
+    """
+    Scans base_dir for existing vN subdirectories.
+    Returns (next_version_dir, version_number).
+
+    Example:
+        base_dir/v1/ exists → returns (base_dir/v2/, 2)
+        base_dir/v1/, v2/ exist → returns (base_dir/v3/, 3)
+        nothing exists → returns (base_dir/v1/, 1)
+    """
+    existing = []
+    if os.path.isdir(base_dir):
+        for entry in os.scandir(base_dir):
+            if entry.is_dir() and entry.name.startswith("v"):
+                try:
+                    existing.append(int(entry.name[1:]))
+                except ValueError:
+                    pass
+
+    version     = max(existing) + 1 if existing else 1
+    version_dir = os.path.join(base_dir, f"v{version}")
+    return version_dir, version
+
+
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 class SHDDataset(Dataset):
-    """
-    Spiking Heidelberg Digits dataset loader.
-    Converts raw spike events → dense (T, N) binary tensors.
-    """
-
     def __init__(self, path, split="train",
                  time_steps=400, n_inputs=700, max_time=1.4):
         self.time_steps = time_steps
@@ -68,8 +88,6 @@ class SHDDataset(Dataset):
             units = f["spikes"]["units"][idx]
 
         label = int(self.labels[idx])
-
-        # Map continuous spike times → discrete timestep bins
         t_idx = np.floor(
             times / self.max_time * self.time_steps
         ).astype(int)
@@ -83,24 +101,17 @@ class SHDDataset(Dataset):
 
 
 def get_loaders(cfg):
-    """Build train and test DataLoaders from config."""
-    train_ds = SHDDataset(
-        cfg.datasets_path, "train",
-        cfg.time_steps, cfg.n_inputs
-    )
-    test_ds = SHDDataset(
-        cfg.datasets_path, "test",
-        cfg.time_steps, cfg.n_inputs
-    )
     train_loader = DataLoader(
-        train_ds,
+        SHDDataset(cfg.datasets_path, "train",
+                   cfg.time_steps, cfg.n_inputs),
         batch_size  = cfg.batch_size,
         shuffle     = True,
         num_workers = cfg.num_workers,
         pin_memory  = True,
     )
     test_loader = DataLoader(
-        test_ds,
+        SHDDataset(cfg.datasets_path, "test",
+                   cfg.time_steps, cfg.n_inputs),
         batch_size  = cfg.batch_size,
         shuffle     = False,
         num_workers = cfg.num_workers,
@@ -112,7 +123,6 @@ def get_loaders(cfg):
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 def get_param_mb(model):
-    """Total parameter memory in MB."""
     return sum(
         p.numel() * p.element_size()
         for p in model.parameters()
@@ -120,7 +130,6 @@ def get_param_mb(model):
 
 
 def get_peak_gpu_mb():
-    """Peak GPU memory allocated in MB (0 if CPU)."""
     return (
         torch.cuda.max_memory_allocated() / (1024 ** 2)
         if torch.cuda.is_available() else 0.0
@@ -133,14 +142,9 @@ def reset_gpu_stats():
 
 
 def count_params_by_type(model):
-    """
-    Break down parameter counts by type.
-    Useful for understanding the delay vs weight split.
-    """
     weight_params = 0
     delay_params  = 0
     other_params  = 0
-
     for name, p in model.named_parameters():
         n = p.numel()
         if "delay" in name:
@@ -149,7 +153,6 @@ def count_params_by_type(model):
             weight_params += n
         else:
             other_params  += n
-
     return {
         "weight_params": weight_params,
         "delay_params" : delay_params,
@@ -160,11 +163,24 @@ def count_params_by_type(model):
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
-def train(cfg, results_dir, resume_path=None):
+def train(cfg, base_dir, resume_path=None):
+
+    # ── Versioning ────────────────────────────────────────────────────────
+    # If resuming, use the existing version dir from the checkpoint path
+    # Otherwise, create a new version dir
+    if resume_path and os.path.exists(resume_path):
+        results_dir = os.path.dirname(resume_path)
+        version     = int(os.path.basename(results_dir)[1:])
+    else:
+        results_dir, version = get_versioned_dir(base_dir)
+
+    os.makedirs(results_dir, exist_ok=True)
 
     # ── Header ────────────────────────────────────────────────────────────
     print(f"\n{'='*65}")
     print(f"  Model      : {cfg.model_name}")
+    print(f"  Version    : v{version}")
+    print(f"  Results    : {results_dir}")
     print(f"  n_hidden   : {cfg.n_hidden}")
     print(f"  time_steps : {cfg.time_steps}")
     print(f"  max_syn_d  : {cfg.max_synaptic_delay}")
@@ -173,14 +189,12 @@ def train(cfg, results_dir, resume_path=None):
     print(f"  tau_syn    : {cfg.tau_syn}")
     print(f"  Epochs     : {cfg.epochs}")
     print(f"  LR         : {cfg.lr}")
+    print(f"  Delay LR   : {cfg.learning_rate_d}")
     print(f"  Batch      : {cfg.batch_size}")
-    print(f"  Results    : {results_dir}")
     print(f"{'='*65}\n")
 
-    os.makedirs(results_dir, exist_ok=True)
     set_seed(cfg.seed)
 
-    # ── Device ────────────────────────────────────────────────────────────
     device = torch.device(
         cfg.device if torch.cuda.is_available() else "cpu"
     )
@@ -206,12 +220,9 @@ def train(cfg, results_dir, resume_path=None):
     print()
 
     # ── Loss ──────────────────────────────────────────────────────────────
-    # CrossEntropy on summed spike counts (logits = sum over T)
     criterion = nn.CrossEntropyLoss()
 
-    # ── Optimiser ─────────────────────────────────────────────────────────
-    # Separate learning rates for weights vs delays (paper recommendation)
-    # Paper: lr_d > lr_w since delays need faster adaptation
+    # ── Optimiser — separate LR for weights vs delays ─────────────────────
     delay_params  = [p for n, p in model.named_parameters()
                      if "delay" in n]
     weight_params = [p for n, p in model.named_parameters()
@@ -239,7 +250,7 @@ def train(cfg, results_dir, resume_path=None):
     best_acc    = 0.0
 
     if resume_path and os.path.exists(resume_path):
-        print(f"  Resuming from: {resume_path}")
+        print(f"  Resuming from : {resume_path}")
         ckpt = torch.load(resume_path, map_location=device)
         model.load_state_dict(ckpt["model_state"])
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -257,6 +268,28 @@ def train(cfg, results_dir, resume_path=None):
     epoch_times  = []
     peak_mems    = []
 
+    # ── Save config snapshot into version dir ─────────────────────────────
+    config_snapshot = {
+        "model_name"        : cfg.model_name,
+        "version"           : version,
+        "n_inputs"          : cfg.n_inputs,
+        "n_hidden"          : cfg.n_hidden,
+        "n_outputs"         : cfg.n_outputs,
+        "time_steps"        : cfg.time_steps,
+        "max_synaptic_delay": cfg.max_synaptic_delay,
+        "max_axonal_delay"  : cfg.max_axonal_delay,
+        "tau_mem"           : cfg.tau_mem,
+        "tau_syn"           : cfg.tau_syn,
+        "surrogate_sigma"   : cfg.surrogate_sigma,
+        "lr"                : cfg.lr,
+        "learning_rate_d"   : cfg.learning_rate_d,
+        "epochs"            : cfg.epochs,
+        "batch_size"        : cfg.batch_size,
+        "seed"              : cfg.seed,
+    }
+    with open(os.path.join(results_dir, "config.json"), "w") as f:
+        json.dump(config_snapshot, f, indent=2)
+
     # ── Main Loop ─────────────────────────────────────────────────────────
     for epoch in range(start_epoch, cfg.epochs):
 
@@ -269,26 +302,20 @@ def train(cfg, results_dir, resume_path=None):
         total      = 0
 
         for spikes, labels in train_loader:
-            spikes = spikes.to(device)          # (B, T, 700)
-            labels = labels.to(device)          # (B,)
+            spikes = spikes.to(device)
+            labels = labels.to(device)
 
             optimizer.zero_grad()
-
-            # Forward: returns (B, 20) summed spike logits
             logits = model(spikes)
-
-            # CrossEntropy loss
-            loss = criterion(logits, labels)
+            loss   = criterion(logits, labels)
             loss.backward()
 
-            # Gradient clipping — important for delay gradients
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=1.0
             )
-
-            # Clamp delays to valid range after update
-            # (delays must stay non-negative)
             optimizer.step()
+
+            # Clamp delays to valid range after every step
             with torch.no_grad():
                 model.sdel1.delay.clamp_(0, cfg.max_synaptic_delay)
                 model.sdel2.delay.clamp_(0, cfg.max_synaptic_delay)
@@ -296,9 +323,9 @@ def train(cfg, results_dir, resume_path=None):
                 model.adel2.delay.clamp_(0, cfg.max_axonal_delay)
 
             with torch.no_grad():
-                preds    = logits.argmax(dim=1)
-                correct += (preds == labels).sum().item()
-                total   += labels.size(0)
+                preds      = logits.argmax(dim=1)
+                correct   += (preds == labels).sum().item()
+                total     += labels.size(0)
                 epoch_loss += loss.item()
 
         # ── Eval ──────────────────────────────────────────────────────
@@ -308,8 +335,8 @@ def train(cfg, results_dir, resume_path=None):
 
         with torch.no_grad():
             for spikes, labels in test_loader:
-                spikes = spikes.to(device)
-                labels = labels.to(device)
+                spikes       = spikes.to(device)
+                labels       = labels.to(device)
                 logits       = model(spikes)
                 preds        = logits.argmax(dim=1)
                 test_correct += (preds == labels).sum().item()
@@ -336,18 +363,19 @@ def train(cfg, results_dir, resume_path=None):
         if test_acc > best_acc:
             best_acc = test_acc
             torch.save({
-                "epoch"       : epoch + 1,
-                "model_state" : model.state_dict(),
-                "optimizer"   : optimizer.state_dict(),
-                "scheduler"   : scheduler.state_dict(),
-                "test_acc"    : test_acc,
-                "delay_stats" : model.get_delay_stats(),
+                "epoch"      : epoch + 1,
+                "version"    : version,
+                "model_state": model.state_dict(),
+                "optimizer"  : optimizer.state_dict(),
+                "scheduler"  : scheduler.state_dict(),
+                "test_acc"   : test_acc,
+                "delay_stats": model.get_delay_stats(),
             }, os.path.join(results_dir,
                             f"{cfg.model_name}_best.pt"))
 
         # ── Print ─────────────────────────────────────────────────────
         print(
-            f"  [{epoch+1:4d}/{cfg.epochs}] "
+            f"  [v{version}][{epoch+1:4d}/{cfg.epochs}] "
             f"Loss: {avg_loss:.5f} | "
             f"Tr: {train_acc*100:.2f}% | "
             f"Te: {test_acc*100:.2f}% | "
@@ -357,21 +385,22 @@ def train(cfg, results_dir, resume_path=None):
             f"t: {epoch_time:.1f}s"
         )
 
-        # ── Periodic checkpoint ───────────────────────────────────────
         logger.log_epoch(
             cfg.model_name, epoch+1, avg_loss,
             train_acc, test_acc, peak_mem, epoch_time
         )
 
+        # ── Periodic checkpoint ───────────────────────────────────────
         if (cfg.save_checkpoints and
                 (epoch + 1) % cfg.checkpoint_every == 0):
             torch.save({
-                "epoch"       : epoch + 1,
-                "model_state" : model.state_dict(),
-                "optimizer"   : optimizer.state_dict(),
-                "scheduler"   : scheduler.state_dict(),
-                "test_acc"    : test_acc,
-                "delay_stats" : model.get_delay_stats(),
+                "epoch"      : epoch + 1,
+                "version"    : version,
+                "model_state": model.state_dict(),
+                "optimizer"  : optimizer.state_dict(),
+                "scheduler"  : scheduler.state_dict(),
+                "test_acc"   : test_acc,
+                "delay_stats": model.get_delay_stats(),
             }, os.path.join(
                 results_dir,
                 f"{cfg.model_name}_epoch{epoch+1}.pt"
@@ -388,28 +417,20 @@ def train(cfg, results_dir, resume_path=None):
 
     # ── Summary ───────────────────────────────────────────────────────────
     summary = {
-        "model_name"    : cfg.model_name,
-        "best_acc"      : float(best_acc),
-        "n_params"      : n_params,
+        "model_name"     : cfg.model_name,
+        "version"        : version,
+        "results_dir"    : results_dir,
+        "best_acc"       : float(best_acc),
+        "n_params"       : n_params,
         "param_breakdown": {k: int(v) for k, v in breakdown.items()},
-        "param_mem_mb"  : float(param_mb),
-        "train_losses"  : [float(x) for x in train_losses],
-        "train_accs"    : [float(x) for x in train_accs],
-        "test_accs"     : [float(x) for x in test_accs],
-        "epoch_times"   : [float(x) for x in epoch_times],
-        "peak_mems"     : [float(x) for x in peak_mems],
-        "delay_stats"   : delay_stats,
-        "config": {
-            "n_hidden"          : cfg.n_hidden,
-            "max_synaptic_delay": cfg.max_synaptic_delay,
-            "max_axonal_delay"  : cfg.max_axonal_delay,
-            "tau_mem"           : cfg.tau_mem,
-            "tau_syn"           : cfg.tau_syn,
-            "surrogate_sigma"   : cfg.surrogate_sigma,
-            "lr"                : cfg.lr,
-            "learning_rate_d"   : cfg.learning_rate_d,
-            "epochs"            : cfg.epochs,
-        },
+        "param_mem_mb"   : float(param_mb),
+        "train_losses"   : [float(x) for x in train_losses],
+        "train_accs"     : [float(x) for x in train_accs],
+        "test_accs"      : [float(x) for x in test_accs],
+        "epoch_times"    : [float(x) for x in epoch_times],
+        "peak_mems"      : [float(x) for x in peak_mems],
+        "delay_stats"    : delay_stats,
+        "config"         : config_snapshot,
     }
 
     summary_path = os.path.join(
@@ -421,7 +442,9 @@ def train(cfg, results_dir, resume_path=None):
     logger.save()
 
     print(f"\n{'='*65}")
+    print(f"  Version       : v{version}")
     print(f"  Best accuracy : {best_acc*100:.2f}%")
+    print(f"  Results dir   : {results_dir}")
     print(f"  Summary saved : {summary_path}")
     print(f"{'='*65}\n")
 
@@ -434,22 +457,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Train Three-Factor Delay SNN on SHD"
     )
-    parser.add_argument(
-        "--epochs",        type=int, default=None,
-        help="Override number of training epochs"
-    )
-    parser.add_argument(
-        "--results-dir",   type=str, default=None,
-        help="Directory to save results"
-    )
-    parser.add_argument(
-        "--datasets-path", type=str, default=None,
-        help="Path to SHD dataset directory"
-    )
-    parser.add_argument(
-        "--resume",        type=str, default=None,
-        help="Path to checkpoint to resume from"
-    )
+    parser.add_argument("--epochs",        type=int, default=None)
+    parser.add_argument("--base-dir",      type=str, default=None,
+                        help="Base results dir — versioning happens inside here")
+    parser.add_argument("--datasets-path", type=str, default=None)
+    parser.add_argument("--resume",        type=str, default=None,
+                        help="Path to checkpoint — resumes in same version dir")
     args = parser.parse_args()
 
     cfg = get_config("three_factor_delay")
@@ -457,11 +470,13 @@ def main():
     if args.epochs        is not None: cfg.epochs        = args.epochs
     if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
 
-    results_dir = args.results_dir or os.path.join(
+    # base_dir is the unversioned root e.g. results/three_factor_delay/
+    # versioning creates results/three_factor_delay/v1/, v2/, etc.
+    base_dir = args.base_dir or os.path.join(
         cfg.results_dir, "three_factor_delay"
     )
 
-    train(cfg, results_dir, resume_path=args.resume)
+    train(cfg, base_dir, resume_path=args.resume)
 
 
 if __name__ == "__main__":
