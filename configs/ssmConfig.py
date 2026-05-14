@@ -21,7 +21,7 @@ from configs.base_config import BenchmarkBaseConfig
 
 class EventSSMConfig(BenchmarkBaseConfig):
 
-    model_name = "event_ssm_model"
+    model_name = "event_ssm"
 
     # ── Architecture ──────────────────────────────────────────────────
     n_inputs    = 700          # SHD cochlear channels
