@@ -317,22 +317,10 @@ class DHLIFLayer(nn.Module):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LeakyReadout(nn.Module):
-    """
-    Non-spiking readout layer with leaky membrane potential.
-
-    From Methods (Experimental setting):
-        y_i = sum_t softmax(u_i_out[t])
-        on SHD: sum_t softmax(u_out[t])
-
-    The readout layer has a leaky membrane potential but
-    infinite threshold (never spikes). Output is the
-    membrane potential trajectory summed over T after softmax.
-    """
-
     def __init__(self, n_pre: int, n_outputs: int,
                  beta_readout: float = 0.9):
         super().__init__()
-        self.fc          = nn.Linear(n_pre, n_outputs, bias=True)
+        self.fc           = nn.Linear(n_pre, n_outputs, bias=True)
         self.beta_readout = beta_readout
         nn.init.xavier_uniform_(self.fc.weight)
         nn.init.zeros_(self.fc.bias)
@@ -342,22 +330,23 @@ class LeakyReadout(nn.Module):
         Args:
             spikes: (B, T, n_pre)
         Returns:
-            logits: (B, n_outputs) — log of summed softmax for NLLLoss
+            logits: (B, n_outputs) — log_softmax for NLLLoss
         """
         B, T, _ = spikes.shape
         device  = spikes.device
 
-        u = torch.zeros(B, self.fc.out_features, device=device)
+        u         = torch.zeros(B, self.fc.out_features, device=device)
         probs_sum = torch.zeros(B, self.fc.out_features, device=device)
 
         for t in range(T):
-            # Leaky membrane potential (no threshold, no reset)
-            u = self.beta_readout * u + self.fc(spikes[:, t, :])
-            # Accumulate softmax probabilities over T
+            u         = self.beta_readout * u + self.fc(spikes[:, t, :])
             probs_sum = probs_sum + F.softmax(u, dim=-1)
 
-        # log for NLLLoss
-        return torch.log(probs_sum + 1e-8)
+        # ── FIX: log_softmax over classes on the SUM ──────────────────────
+        # probs_sum is in range [0, T] — unnormalised over classes
+        # log_softmax renormalises correctly for NLLLoss
+        # Do NOT use log(probs_sum + eps) — that gives wrong scale
+        return F.log_softmax(probs_sum, dim=-1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
