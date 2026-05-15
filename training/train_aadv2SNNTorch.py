@@ -202,7 +202,7 @@ def train(cfg, results_dir):
         lr           = cfg.lr,
         betas        = (0.9, 0.999),
         eps          = 1e-8,
-        weight_decay = getattr(cfg, "weight_decay", 0.0),
+        weight_decay = 1e-5,    # very light — just enough to slow memorisation,
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=cfg.lr_milestones, gamma=cfg.lr_gamma,
