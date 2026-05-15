@@ -29,7 +29,7 @@ theta_u:
     (theta_u=0.2 → rate≈0.48 SATURATED; theta_u=5.0 → rate≈0.04 too sparse)
 """
 
-from configs.aad_v2_snntorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
+from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
 
 
 class LogBufferSNNTorchConfig(AdaptiveAxonalDelayV2ConfigSNNTorch):
