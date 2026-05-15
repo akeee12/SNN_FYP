@@ -32,7 +32,7 @@ theta_u:
 from configs.aad_v2_snntorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
 
 
-class LogBufferAADConfigSNNTorch(AdaptiveAxonalDelayV2ConfigSNNTorch):
+class LogBufferSNNTorchConfig(AdaptiveAxonalDelayV2ConfigSNNTorch):
     """
     Log Buffer AAD config — inherits all V2 SNNTorch settings.
     Only adds / overrides buffer-specific hyperparameters.
