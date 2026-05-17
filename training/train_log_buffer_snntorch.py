@@ -490,7 +490,7 @@ def main():
                         help="Override cfg.theta_u")
     args = parser.parse_args()
 
-    cfg = get_config("log_buffer_aad_snntorch")
+    cfg = get_config("log_buffer_snntorch")
 
     if args.epochs         is not None: cfg.epochs         = args.epochs
     if args.datasets_path  is not None: cfg.datasets_path  = args.datasets_path
