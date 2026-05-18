@@ -24,6 +24,7 @@ from configs.log_buffer_snntorch_config import LogBufferSNNTorchConfig
 from configs.cadlif_config import cAdLIFConfig
 from configs.dhlif_config import DHLIFConfig
 from configs.ssmConfig import EventSSMConfig
+from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -41,7 +42,8 @@ MODEL_REGISTRY = {
     "log_buffer_snntorch"   : LogBufferSNNTorchConfig,
     "cadlif": cAdLIFConfig,
     "dhlif": DHLIFConfig,
-    "event_ssm": EventSSMConfig
+    "event_ssm": EventSSMConfig,
+    "linear_tap": LinearTapSNNTorchConfig
 
 }
 
