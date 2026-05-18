@@ -9,6 +9,7 @@ from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2Co
 from configs.log_buffer_snntorch_config import LogBufferSNNTorchConfig
 from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
 from configs.exponential_tap_snntorch_config import ExponentialTapSNNTorchConfig
+from configs.power_law_tap_snntorch_config import PowerLawTapSNNTorchConfig
 from configs.registry import get_config, list_models, MODEL_REGISTRY
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "LogBufferSNNTorchConfig",
     "AdaptiveAxonalDelayV2ConfigSNNTorch",
     "LinearTapSNNTorchConfig",
-    "ExponentialTapSNNTorchConfig"
+    "ExponentialTapSNNTorchConfig",
+    "PowerLawTapSNNTorchConfig"
 ]

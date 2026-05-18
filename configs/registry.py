@@ -27,6 +27,7 @@ from configs.ssmConfig import EventSSMConfig
 from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
 from configs.exponential_tap_snntorch_config import ExponentialTapSNNTorchConfig
 from configs.random_tap_snntorch_config import RandomTapSNNTorchConfig
+from configs.power_law_tap_snntorch_config import PowerLawTapSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -47,7 +48,8 @@ MODEL_REGISTRY = {
     "event_ssm": EventSSMConfig,
     "linear_tap_snntorch": LinearTapSNNTorchConfig,
     "exponential_tap_snntorch": ExponentialTapSNNTorchConfig,
-    "random_tap_snntorch":RandomTapSNNTorchConfig
+    "random_tap_snntorch": RandomTapSNNTorchConfig,
+    "power_tap_snntorch": PowerLawTapSNNTorchConfig
 
 }
 
