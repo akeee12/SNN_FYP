@@ -43,7 +43,7 @@ MODEL_REGISTRY = {
     "cadlif": cAdLIFConfig,
     "dhlif": DHLIFConfig,
     "event_ssm": EventSSMConfig,
-    "linear_tap": LinearTapSNNTorchConfig
+    "linear_tap_aad_snntorch": LinearTapSNNTorchConfig
 
 }
 
