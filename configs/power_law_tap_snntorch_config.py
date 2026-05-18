@@ -1,50 +1,33 @@
 # configs/power_law_tap_snntorch_config.py
 """
-Power-law tap strategy with tunable gamma exponent.
+Power-law tap strategy for the temporal buffer — ring buffer storage.
 
     t_i = round( max_lag * (i / (n-1))^gamma )
 
     for i = 0, 1, ..., n-1
 
-Endpoints are pinned: t_0=1, t_{n-1}=max_lag.
-
-This is deliberately and mathematically distinct from both log
-and true exponential strategies:
-
-    Log spacing    : geometric sequence, t_i = max_lag^(i/(n-1))
-                     ratio between consecutive taps is CONSTANT
-                     → equal ratio spacing in log domain
-
-    True exp (e^i) : grows faster than any polynomial, hits max_lag
-                     quickly and zero-pads remaining taps
-
-    Power law γ=2  : t_i = max_lag * (i/(n-1))^2
-                     gaps INCREASE quadratically
-                     denser coverage of recent lags
-                     → equal spacing in sqrt domain
+Endpoints pinned: t_0=1, t_{n-1}=max_lag.
 
 With max_lag=64, n_taps=7, gamma=2:
     i/(n-1) = [0, 0.167, 0.333, 0.5, 0.667, 0.833, 1.0]
     squared  = [0, 0.028, 0.111, 0.25, 0.444, 0.694, 1.0]
-    × 64     = [0, 1.8,   7.1,  16,   28.4,  44.4,  64 ]
+    x64      = [0, 1.8,   7.1,  16,   28.4,  44.4,  64 ]
     rounded  = [1, 2,     7,    16,   28,    44,    64  ]
 
-Compare directly:
-    Log      (ratio=2) : [1,  2,  4,  8, 16, 32, 64]
-    Power γ=2          : [1,  2,  7, 16, 28, 44, 64]
-    Linear             : [9, 18, 27, 36, 45, 54, 64]
+Compare to log:
+    log      = [1, 2,     4,     8,   16,    32,    64  ]
 
-Power law with gamma=2 sits between log and linear — it keeps
-dense short-lag coverage but reaches mid-range lags faster than
-log. Supported by temporal coding literature (Perez-Nieves et al.
-2021, NeurIPS) which shows SNN temporal features benefit from
-non-uniform lag spacing biased toward recent history.
+Power law gamma=2 is genuinely distinct from log — gaps grow
+quadratically rather than doubling, giving denser mid-range coverage.
 
 gamma sweep guide:
-    gamma < 1  : sub-linear → denser at LONG lags (unusual)
-    gamma = 1  : linear spacing (same as linear_tap_config)
-    gamma = 2  : quadratic → denser at SHORT lags (default)
-    gamma = 3  : cubic → even denser at very short lags
+    gamma=1   : linear spacing (same as linear_tap_config)
+    gamma=2   : quadratic — default, distinct from log
+    gamma=3   : cubic — even denser at very short lags
+
+Storage: ring buffer — O(B*k) per timestep vs O(B*k*max_lag)
+for rolling window. Write pointer advances with modulo arithmetic.
+No data is ever physically shifted in memory.
 """
 
 import math
@@ -56,15 +39,17 @@ class PowerLawTapSNNTorchConfig(LogBufferSNNTorchConfig):
     model_name   = "PowerLawTapAADSNNTorch"
     tap_strategy = "power_law"
     n_taps       = 7
-    gamma        = 2.0     # exponent — sweep this as a hyperparameter
-                           # gamma=2 is default, distinct from log
+    gamma        = 2.0
+    use_ring     = True
 
     def __init__(self):
         super().__init__()
         self.taps = self._compute_power_law_taps()
-        print(f"  [PowerLawTap] gamma={self.gamma}  taps={self.taps}")
+        print(f"  [PowerLawTap] gamma={self.gamma}  "
+              f"taps={self.taps}  storage=ring")
 
     def _compute_power_law_taps(self) -> list:
+        
         max_lag = self.buffer_max_lag
         n       = self.n_taps
         gamma   = self.gamma
@@ -77,7 +62,7 @@ class PowerLawTapSNNTorchConfig(LogBufferSNNTorchConfig):
             t = max_lag * ((i / (n - 1)) ** gamma)
             taps.append(max(1, round(t)))
 
-        # pin endpoints exactly — rounding can shift by 1
+        # pin endpoints exactly
         taps[0]  = 1
         taps[-1] = max_lag
 
