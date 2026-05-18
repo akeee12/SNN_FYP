@@ -49,7 +49,7 @@ MODEL_REGISTRY = {
     "linear_tap_snntorch": LinearTapSNNTorchConfig,
     "exponential_tap_snntorch": ExponentialTapSNNTorchConfig,
     "random_tap_snntorch": RandomTapSNNTorchConfig,
-    "power_tap_snntorch": PowerLawTapSNNTorchConfig
+    "power_law_tap_snntorch": PowerLawTapSNNTorchConfig
 
 }
 
