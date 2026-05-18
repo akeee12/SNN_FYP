@@ -25,6 +25,7 @@ from configs.cadlif_config import cAdLIFConfig
 from configs.dhlif_config import DHLIFConfig
 from configs.ssmConfig import EventSSMConfig
 from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
+from configs.exponential_tap_snntorch_config import ExponentialTapSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -43,7 +44,8 @@ MODEL_REGISTRY = {
     "cadlif": cAdLIFConfig,
     "dhlif": DHLIFConfig,
     "event_ssm": EventSSMConfig,
-    "linear_tap_snntorch": LinearTapSNNTorchConfig
+    "linear_tap_snntorch": LinearTapSNNTorchConfig,
+    "exponential_tap_snntorch": ExponentialTapSNNTorchConfig
 
 }
 
