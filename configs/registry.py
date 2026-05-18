@@ -26,6 +26,7 @@ from configs.dhlif_config import DHLIFConfig
 from configs.ssmConfig import EventSSMConfig
 from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
 from configs.exponential_tap_snntorch_config import ExponentialTapSNNTorchConfig
+from configs.random_tap_snntorch_config import RandomTapSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -45,7 +46,8 @@ MODEL_REGISTRY = {
     "dhlif": DHLIFConfig,
     "event_ssm": EventSSMConfig,
     "linear_tap_snntorch": LinearTapSNNTorchConfig,
-    "exponential_tap_snntorch": ExponentialTapSNNTorchConfig
+    "exponential_tap_snntorch": ExponentialTapSNNTorchConfig,
+    "random_tap_snntorch":RandomTapSNNTorchConfig
 
 }
 
