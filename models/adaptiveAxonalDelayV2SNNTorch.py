@@ -57,7 +57,9 @@ class AxonalDelay(nn.Module):
 
     def forward(self, spikes: torch.Tensor) -> torch.Tensor:
         """spikes: (B, N, T) → (B, N, T)"""
-        d       = self.delay.clamp(0, self.max_delay)
+        d = self.delay.clamp(0, self.max_delay)
+        if torch.isnan(d).any():
+            d = torch.nan_to_num(d, nan=0.0)
         d_floor = d.floor().long()
         d_ceil  = d.ceil().long()
         alpha   = (d - d.floor()).view(1, -1, 1)

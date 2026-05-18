@@ -335,7 +335,7 @@ def train(cfg, base_dir, resume_path=None):
             loss   = model.compute_loss(output, labels, cfg)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=5.0
+                model.parameters(), max_norm=1.0
             )
             optimizer.step()
 
