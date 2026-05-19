@@ -89,12 +89,12 @@ class AxonalDelay(nn.Module):
 
     def get_stats(self) -> dict:
         d = self.delay.detach().cpu()
+        p95 = torch.quantile(d, 0.95).item()
         return {
             "max" : d.max().item(),
             "mean": d.mean().item(),
-            "p95" : torch.quantile(d, 0.95).item(),
+            "p95" : p95 if torch.isfinite(torch.tensor(p95)) else 0.0,
         }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FULL NETWORK

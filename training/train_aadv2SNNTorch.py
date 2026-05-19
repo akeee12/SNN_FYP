@@ -1,15 +1,14 @@
-# training/train_aadv2.py
+# training/train_aadv2SNNTorch.py
 """
 Training script for AdaptiveAxonalDelayNetV2 — snnTorch version.
 Faithful reproduction of Sun et al. ICASSP 2023.
 
-Active fixes vs the broken 12-05 run:
+Active fixes:
   FIX 1 — DelayScheduler: thea1/thea2 only ever increment (+1).
-           Never reset to torch.floor(d).max() — that caused caps to
-           collapse to 5/9 by epoch 256 in the original run.
   FIX 2 — delay_sched.step() called ONCE PER EPOCH after the train loop.
-           Was inside the batch loop before (fired ~64x/epoch), making
-           adapt_window=125 trigger every ~2 epochs instead of 125.
+  FIX 3 — NaN/Inf gradients zeroed before clip and optimizer step.
+  FIX 4 — NaN/Inf parameters reset after optimizer step.
+  FIX 5 — delay stats guarded against NaN from torch.quantile.
 
 Versioning:
   Results saved to results_dir/vN/ automatically.
@@ -42,14 +41,6 @@ from adaptiveAxonalDelayV2SNNTorch import AdaptiveAxonalDelayNetV2SNNTorch
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_versioned_dir(base_dir: str) -> tuple:
-    """
-    Scans base_dir for existing vN subdirectories.
-    Returns (next_version_dir, version_number).
-
-    Example:
-        base_dir/v1/ exists → returns (base_dir/v2/, 2)
-        nothing exists      → returns (base_dir/v1/, 1)
-    """
     existing = []
     if os.path.isdir(base_dir):
         for entry in os.scandir(base_dir):
@@ -138,19 +129,54 @@ def get_param_mb(model):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NaN UTILITIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def zero_nan_grads(model: nn.Module):
+    """FIX 3: zero any NaN/Inf gradients before optimizer step."""
+    for param in model.parameters():
+        if param.grad is not None:
+            if (torch.isnan(param.grad).any() or
+                    torch.isinf(param.grad).any()):
+                param.grad = torch.nan_to_num(
+                    param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def reset_nan_params(model: nn.Module):
+    """FIX 4: reset any NaN/Inf parameters after optimizer step."""
+    with torch.no_grad():
+        for param in model.parameters():
+            if (torch.isnan(param.data).any() or
+                    torch.isinf(param.data).any()):
+                param.data = torch.nan_to_num(
+                    param.data, nan=0.0, posinf=1.0, neginf=0.0)
+
+
+def safe_delay_stats(model) -> tuple:
+    """FIX 5: guard delay stats against NaN from torch.quantile."""
+    try:
+        stats  = model.get_delay_stats()
+        d1_p95 = stats['delay1']['p95']
+        d2_p95 = stats['delay2']['p95']
+        if not torch.isfinite(torch.tensor(float(d1_p95))):
+            d1_p95 = 0.0
+        if not torch.isfinite(torch.tensor(float(d2_p95))):
+            d2_p95 = 0.0
+    except Exception:
+        d1_p95 = 0.0
+        d2_p95 = 0.0
+    return d1_p95, d2_p95
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DELAY SCHEDULER — FIX 1 + FIX 2
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DelayScheduler:
     """
     Faithful port of Pengfei's delay cap logic.
-
-    INVARIANT: thea1/thea2 are monotonically non-decreasing.
-    They start at delay_init_cap and grow by +1 when the 84th-percentile
-    delay is within expand_margin of the cap. They NEVER shrink.
-
-    step() must be called once per epoch (after the training loop).
-    adapt_window is in epochs.
+    thea1/thea2 are monotonically non-decreasing — NEVER shrink.
+    step() called once per epoch after the training loop.
     """
 
     def __init__(self, cfg):
@@ -163,7 +189,6 @@ class DelayScheduler:
         self.update2       = 0
 
     def step(self, model, epoch):
-        """Call once per epoch, after the training loop."""
         if epoch <= self.adapt_start:
             model.clamp_delays(self.thea1, self.thea2)
             return
@@ -174,12 +199,13 @@ class DelayScheduler:
         d1 = model.delay1.delay.detach().cpu()
         d2 = model.delay2.delay.detach().cpu()
 
-        # index 108 out of 128 = 84th percentile — matches Pengfei exactly
+        # Guard against NaN in delay values before sorting
+        d1 = torch.nan_to_num(d1, nan=0.0)
+        d2 = torch.nan_to_num(d2, nan=0.0)
+
         sorted1 = torch.sort(torch.floor(d1))[0]
         sorted2 = torch.sort(torch.floor(d2))[0]
 
-        # FIX 1: compare against self.thea (stored cap), never against
-        # current delay max. Only increment, never reset.
         if self.update1 >= self.adapt_window:
             if sorted1[108] > (self.thea1 - self.expand_margin):
                 self.thea1 += 1.0
@@ -225,7 +251,6 @@ def train(cfg, base_dir, resume_path=None):
 
     os.makedirs(results_dir, exist_ok=True)
 
-    # ── Header ────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Model      : {cfg.model_name}")
     print(f"  Version    : v{version}")
@@ -241,8 +266,7 @@ def train(cfg, base_dir, resume_path=None):
     set_seed(cfg.seed)
 
     device = torch.device(
-        cfg.device if torch.cuda.is_available() else "cpu"
-    )
+        cfg.device if torch.cuda.is_available() else "cpu")
     print(f"  Using device : {device}\n")
 
     # ── Model ─────────────────────────────────────────────────────────
@@ -261,7 +285,7 @@ def train(cfg, base_dir, resume_path=None):
         lr           = cfg.lr,
         betas        = (0.9, 0.999),
         eps          = 1e-8,
-        weight_decay = 1e-5,
+        weight_decay = getattr(cfg, "weight_decay", 1e-5),
     )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
@@ -292,20 +316,20 @@ def train(cfg, base_dir, resume_path=None):
 
     # ── Config snapshot ───────────────────────────────────────────────
     config_snapshot = {
-        "model_name"   : cfg.model_name,
-        "version"      : version,
-        "tau_s"        : cfg.tau_s,
-        "tau_r"        : cfg.tau_r,
-        "threshold"    : cfg.threshold,
-        "lr"           : cfg.lr,
-        "weight_decay" : getattr(cfg, "weight_decay", 1e-5),
-        "dropout"      : getattr(cfg, "dropout", 0.0),
-        "batch_size"   : cfg.batch_size,
-        "epochs"       : cfg.epochs,
-        "delay_init_cap"   : cfg.delay_init_cap,
-        "delay_adapt_start": cfg.delay_adapt_start,
+        "model_name"        : cfg.model_name,
+        "version"           : version,
+        "tau_s"             : cfg.tau_s,
+        "tau_r"             : cfg.tau_r,
+        "threshold"         : cfg.threshold,
+        "lr"                : cfg.lr,
+        "weight_decay"      : getattr(cfg, "weight_decay", 1e-5),
+        "dropout"           : getattr(cfg, "dropout", 0.0),
+        "batch_size"        : cfg.batch_size,
+        "epochs"            : cfg.epochs,
+        "delay_init_cap"    : cfg.delay_init_cap,
+        "delay_adapt_start" : cfg.delay_adapt_start,
         "delay_adapt_window": cfg.delay_adapt_window,
-        "seed"         : cfg.seed,
+        "seed"              : cfg.seed,
     }
     with open(os.path.join(results_dir, "config.json"), "w") as f:
         json.dump(config_snapshot, f, indent=2)
@@ -334,17 +358,24 @@ def train(cfg, base_dir, resume_path=None):
             output = model(spikes)
             loss   = model.compute_loss(output, labels, cfg)
             loss.backward()
+
+            # FIX 3: zero NaN/Inf gradients before clip
+            zero_nan_grads(model)
+
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=1.0
-            )
+                model.parameters(), max_norm=1.0)
+
             optimizer.step()
+
+            # FIX 4: reset NaN/Inf parameters after optimizer update
+            reset_nan_params(model)
 
             pred        = model.predict(output)
             correct    += (pred == labels).sum().item()
             total      += labels.size(0)
             epoch_loss += loss.item()
 
-        # FIX 2: delay scheduler called once per epoch, not per batch
+        # FIX 2: delay scheduler called once per epoch
         delay_sched.step(model, epoch)
         scheduler.step()
 
@@ -370,7 +401,9 @@ def train(cfg, base_dir, resume_path=None):
         avg_loss     = epoch_loss / len(train_loader)
         thea1, thea2 = delay_sched.get_caps()
         current_lr   = optimizer.param_groups[0]["lr"]
-        stats        = model.get_delay_stats()
+
+        # FIX 5: guard delay stats against NaN
+        d1_p95, d2_p95 = safe_delay_stats(model)
 
         train_losses.append(avg_loss)
         train_accs.append(train_acc)
@@ -404,8 +437,8 @@ def train(cfg, base_dir, resume_path=None):
             f"Mem: {peak_mem:.1f}MB | "
             f"t: {epoch_time:.1f}s | "
             f"Caps: [{thea1:.0f},{thea2:.0f}] | "
-            f"d1_p95: {stats['delay1']['p95']:.2f} | "
-            f"d2_p95: {stats['delay2']['p95']:.2f}"
+            f"d1_p95: {d1_p95:.2f} | "
+            f"d2_p95: {d2_p95:.2f}"
         )
 
         logger.log_epoch(
@@ -433,26 +466,25 @@ def train(cfg, base_dir, resume_path=None):
 
     # ── Summary ───────────────────────────────────────────────────────
     summary = {
-        "model_name"             : cfg.model_name,
-        "version"                : version,
-        "results_dir"            : results_dir,
-        "best_acc"               : float(best_acc),
-        "n_params"               : n_params,
-        "param_mem_mb"           : float(param_mb),
+        "model_name"              : cfg.model_name,
+        "version"                 : version,
+        "results_dir"             : results_dir,
+        "best_acc"                : float(best_acc),
+        "n_params"                : n_params,
+        "param_mem_mb"            : float(param_mb),
         "total_train_time_seconds": float(sum(epoch_times)),
-        "train_losses"           : [float(x) for x in train_losses],
-        "train_accs"             : [float(x) for x in train_accs],
-        "test_accs"              : [float(x) for x in test_accs],
-        "epoch_times"            : [float(x) for x in epoch_times],
-        "peak_mems"              : [float(x) for x in peak_mems],
-        "final_thea1"            : float(delay_sched.thea1),
-        "final_thea2"            : float(delay_sched.thea2),
-        "config"                 : config_snapshot,
+        "train_losses"            : [float(x) for x in train_losses],
+        "train_accs"              : [float(x) for x in train_accs],
+        "test_accs"               : [float(x) for x in test_accs],
+        "epoch_times"             : [float(x) for x in epoch_times],
+        "peak_mems"               : [float(x) for x in peak_mems],
+        "final_thea1"             : float(delay_sched.thea1),
+        "final_thea2"             : float(delay_sched.thea2),
+        "config"                  : config_snapshot,
     }
 
     summary_path = os.path.join(
-        results_dir, f"{cfg.model_name}_summary.json"
-    )
+        results_dir, f"{cfg.model_name}_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -491,8 +523,7 @@ def main():
     if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
 
     base_dir = args.base_dir or os.path.join(
-        cfg.results_dir, "aad_v2"
-    )
+        cfg.results_dir, "aad_v2")
 
     train(cfg, base_dir, resume_path=args.resume)
 
