@@ -150,7 +150,7 @@ class LogRingBuffer(nn.Module):
 # FULL NETWORK
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LogBufferAADNetSNNTorch(nn.Module):
+class LogRingBufferAADNetSNNTorch(nn.Module):
     """
     AAD SNN with log-spaced taps and ring buffer storage.
 
@@ -165,7 +165,7 @@ class LogBufferAADNetSNNTorch(nn.Module):
         beta  = float(torch.exp(torch.tensor(-1.0 / cfg.tau_r)))
 
         # ── Log ring buffer (replaces fc1) ────────────────────────────
-        self.log_buffer = LogRingBuffer(
+        self.log_ring_buffer = LogRingBuffer(
             n_inputs     = cfg.n_inputs,
             n_hidden     = cfg.n_hidden,
             buffer_size  = cfg.buffer_size,
@@ -238,7 +238,7 @@ class LogBufferAADNetSNNTorch(nn.Module):
         out : (T, B, n_outputs)
         """
         B, T, _ = x.shape
-        self.log_buffer.reset(B)
+        self.log_ring_buffer.reset(B)
 
         syn1, mem1 = self.lif1.init_synaptic()
         syn2, mem2 = self.lif2.init_synaptic()
@@ -247,7 +247,7 @@ class LogBufferAADNetSNNTorch(nn.Module):
         # ── Layer 1: input → hidden via log ring buffer ───────────────
         spk1_buf = []
         for t in range(T):
-            cur1             = self.log_buffer.step(x[:, t, :])
+            cur1             = self.log_ring_buffer.step(x[:, t, :])
             spk1, syn1, mem1 = self.lif1(cur1, syn1, mem1)
             spk1_buf.append(spk1)
 
@@ -297,8 +297,8 @@ class LogBufferAADNetSNNTorch(nn.Module):
 
     def get_buffer_info(self):
         return {
-            "k"      : self.log_buffer.k,
-            "L"      : self.log_buffer.L,
-            "taps"   : self.log_buffer.taps,
+            "k"      : self.log_ring_buffer.k,
+            "L"      : self.log_ring_buffer.L,
+            "taps"   : self.log_ring_buffer.taps,
             "storage": "ring",
         }
