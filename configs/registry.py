@@ -51,7 +51,7 @@ MODEL_REGISTRY = {
     "exponential_tap_snntorch": ExponentialTapSNNTorchConfig,
     "random_tap_snntorch": RandomTapSNNTorchConfig,
     "power_law_tap_snntorch": PowerLawTapSNNTorchConfig,
-    "log_ring_buffer": LogRingBufferSNNTorchConfig
+    "log_ring_buffer_snntorch": LogRingBufferSNNTorchConfig
 
 }
 
