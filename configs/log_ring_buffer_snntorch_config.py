@@ -9,13 +9,14 @@ Registry key: "log_ring_buffer_snntorch"
 """
 
 import math
-from configs.aad_v2_snntorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
+from configs.adaptiveAxonalDelayV2SNNtorch_config import AdaptiveAxonalDelayV2ConfigSNNTorch
 
 
 class LogRingBufferSNNTorchConfig(AdaptiveAxonalDelayV2ConfigSNNTorch):
 
     model_name   = "LogRingBufferAADSNNTorch"
     tap_strategy = "log"
+    
     use_ring     = True
 
     buffer_size    = 32
