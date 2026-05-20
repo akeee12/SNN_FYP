@@ -28,6 +28,7 @@ from configs.linear_tap_snntorch_config import LinearTapSNNTorchConfig
 from configs.exponential_tap_snntorch_config import ExponentialTapSNNTorchConfig
 from configs.random_tap_snntorch_config import RandomTapSNNTorchConfig
 from configs.power_law_tap_snntorch_config import PowerLawTapSNNTorchConfig
+from configs.log_ring_buffer_snntorch_config import LogRingBufferSNNTorchConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -49,7 +50,8 @@ MODEL_REGISTRY = {
     "linear_tap_snntorch": LinearTapSNNTorchConfig,
     "exponential_tap_snntorch": ExponentialTapSNNTorchConfig,
     "random_tap_snntorch": RandomTapSNNTorchConfig,
-    "power_law_tap_snntorch": PowerLawTapSNNTorchConfig
+    "power_law_tap_snntorch": PowerLawTapSNNTorchConfig,
+    "log_ring_buffer": LogRingBufferSNNTorchConfig
 
 }
 
