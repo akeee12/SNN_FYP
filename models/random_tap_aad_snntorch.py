@@ -3,7 +3,7 @@
 RandomTapAADNetSNNTorch — randomly sampled taps with ring buffer storage.
 
 Ring buffer complexity:
-    Write per timestep : O(B * k)           — one slot written
+    Write per timestep : O(B * k)           — one slot writtentrtr
     Rolling alternative: O(B * k * max_lag) — entire buffer shifted
     Saving             : 64x for max_lag=64
 

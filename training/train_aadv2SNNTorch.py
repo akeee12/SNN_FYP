@@ -142,7 +142,7 @@ class DVSGestureDataset(Dataset):
 
     def __init__(self, path, split="train",
                  time_steps=300, n_inputs=2048,
-                 max_time=3704997.0):
+                 max_time=11935114):
         self.time_steps = time_steps
         self.n_inputs   = n_inputs
         self.max_time   = max_time
