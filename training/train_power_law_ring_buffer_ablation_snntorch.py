@@ -573,21 +573,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Train PowerLawTapAADNetSNNTorch — ablation ready"
     )
-    parser.add_argument("--epochs",        type=int,   default=None)
-    parser.add_argument("--datasets-path", type=str,   default=None)
-    parser.add_argument("--base-dir",      type=str,   default=None)
-    parser.add_argument("--resume",        type=str,   default=None)
-    parser.add_argument("--buffer-size",   type=int,   default=None,
+    parser.add_argument("--epochs",         type=int,   default=None)
+    parser.add_argument("--datasets-path",  type=str,   default=None)
+    parser.add_argument("--base-dir",       type=str,   default=None)
+    parser.add_argument("--resume",         type=str,   default=None)
+    parser.add_argument("--buffer-size",    type=int,   default=None,
                         help="k — bottleneck width (default from config)")
-    parser.add_argument("--num-taps",      type=int,   default=None,
-                        help="n — number of taps (2..9). "
-                             "Sets taps and buffer_max_lag automatically.")
-    parser.add_argument("--network-size",  type=str,   default="medium",
-                        choices=["small", "medium", "large"],
-                        help="small=64, medium=128, large=256 hidden units")
-    parser.add_argument("--gamma",         type=float, default=None,
+    parser.add_argument("--buffer-max-lag", type=int,   default=None,
+                        help="Override buffer_max_lag after tap generation. "
+                             "Use to fix max_lag independently of --num-taps.")
+    parser.add_argument("--num-taps",       type=int,   default=None,
+                        help="n — number of taps (2..9).")
+    parser.add_argument("--network-size",   type=str,   default="medium",
+                        choices=["small", "medium", "large"])
+    parser.add_argument("--gamma",          type=float, default=None,
                         help="Power law exponent (default from config = 2.0)")
-    parser.add_argument("--theta-u",       type=float, default=None)
+    parser.add_argument("--theta-u",        type=float, default=None)
     args = parser.parse_args()
 
     cfg = get_config("power_law_tap_snntorch")
@@ -601,11 +602,11 @@ def main():
     # Network size → n_hidden
     cfg.n_hidden = NETWORK_SIZES[args.network_size]
 
-    # Gamma — override before tap computation
+    # Gamma — must be set before tap computation
     if args.gamma is not None:
         cfg.gamma = args.gamma
 
-    # Taps and max_lag — set together from n and gamma
+    # Taps — computed from n and gamma
     if args.num_taps is not None:
         cfg.buffer_max_lag = max_lag_for_n(args.num_taps)
         cfg.taps = make_power_law_taps(
@@ -613,6 +614,13 @@ def main():
         )
         print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} → "
               f"taps={cfg.taps}  max_lag={cfg.buffer_max_lag}")
+
+    # buffer_max_lag override — MUST come after --num-taps block
+    # so it can override the auto-computed value
+    # taps are already set correctly — only the ring buffer depth changes
+    if args.buffer_max_lag is not None:
+        cfg.buffer_max_lag = args.buffer_max_lag
+        print(f"  [max_lag override] buffer_max_lag set to {cfg.buffer_max_lag}")
 
     # ── Resolve output directory ──────────────────────────────────────
     run_name = make_run_name(cfg, args.network_size)
