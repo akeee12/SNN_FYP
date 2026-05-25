@@ -1,10 +1,10 @@
 # experiments/plot_benchmark_scatter.py
 """
-Benchmark scatter plot — parameters (x, log scale) vs best test accuracy (y).
+Benchmark scatter plot — parameters (x, linear scale) vs best test accuracy (y).
 
 Exact RDS paths as found 25/05/2026:
 
-    aad_v2_snntorch_500e/v3   → AAD V2 SNNTorch baseline  (69.26%)
+    aad_v2_snntorch_500e/v3   → AAD SNNTorch baseline     (69.26%)
     cadlif/v2                 → CaDLIF                     (87.15%)
     dcls/                     → DCLS                       (88.74%)
     dhlif/v1                  → DHLIF                      (87.01%)
@@ -47,28 +47,28 @@ sys.path.insert(0, ROOT)
 
 MODEL_PATH_MAP = {
     "shd": [
-        # ── Benchmark models ──────────────────────────────────────────
+        # ── Benchmark models (circles) ────────────────────────────────
         ("aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
-         "AAD V2 SNNTorch",      "o",  "#2c7bb6", "benchmark"),
+         "AAD SNNTorch",          "o", "black", "benchmark"),
         ("cadlif/v2/cAdLIF_summary.json",
-         "CaDLIF",               "P",  "#e6ab02", "benchmark"),
+         "CaDLIF",                "o", "black", "benchmark"),
         ("dcls/DCLS_summary.json",
-         "DCLS",                 "*",  "#f46d43", "benchmark"),
+         "DCLS",                  "o", "black", "benchmark"),
         ("dhlif/v1/DHLIF_summary.json",
-         "DHLIF",                "h",  "#4dac26", "benchmark"),
+         "DHLIF",                 "o", "black", "benchmark"),
         ("event_ssm/v1/event_ssm_summary.json",
-         "Event SSM",            "H",  "#1b7837", "benchmark"),
-        # ── Buffer strategies ─────────────────────────────────────────
+         "Event SSM",             "o", "black", "benchmark"),
+        # ── Buffer strategies (crosses) ───────────────────────────────
         ("exponential_tap/v1/ExponentialTapAADSNNTorch_summary.json",
-         "Exponential buffer",   "v",  "#abdda4", "buffer"),
+         "Exponential buffer",    "x", "black", "buffer"),
         ("linear_tap/v1/LinearTapAADSNNTorch_summary.json",
-         "Linear buffer",        "^",  "#fdae61", "buffer"),
+         "Linear buffer",         "x", "black", "buffer"),
         ("log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
-         "Log buffer",           "s",  "#d7191c", "buffer"),
+         "Log buffer",            "x", "black", "buffer"),
         ("power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
-         "Power-law buffer (γ=2)","<", "#9e0142", "buffer"),
+         "Power-law buffer (γ=2)","x", "black", "buffer"),
         ("random_tap/v1/RandomTapAADSNNTorch_summary.json",
-         "Random buffer",        ">",  "#756bb1", "buffer"),
+         "Random buffer",         "x", "black", "buffer"),
     ],
     # ── Add ssc / dvs entries here when trained ───────────────────────
     "ssc": [],
@@ -81,10 +81,6 @@ MODEL_PATH_MAP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_all_models(results_root: str, dataset: str) -> list:
-    """
-    Loads each model from its exact hardcoded path.
-    Returns list of model dicts.
-    """
     entries = MODEL_PATH_MAP.get(dataset, [])
     if not entries:
         print(f"  [WARN] No path map defined for dataset={dataset}")
@@ -146,7 +142,6 @@ def get_avg_epoch_time(summary: dict) -> float:
 
 
 def identify_best_buffer(models: list) -> str | None:
-    """Returns the label of the highest-accuracy buffer strategy."""
     buf = [m for m in models if m["group"] == "buffer"]
     if not buf:
         return None
@@ -161,146 +156,185 @@ def plot_benchmark_scatter(models: list,
                            dataset: str,
                            output_path: str):
     """
-    X : number of parameters (log scale)
-    Y : best test accuracy (%)
+    X : number of parameters (linear scale)
+    Y : highest test accuracy (%)
 
-    Benchmark models  — larger markers (size 280), bold annotation
-    Buffer strategies — smaller markers (size 160), normal annotation
-    Best buffer       — outlined with a gold ring to highlight it
+    Benchmark models  — filled circles (○), size 100
+    Buffer strategies — crosses (×), size 100
+    Best buffer       — annotated with ★
 
-    Legend outside right, split by group.
+    Publication-quality styling: black/white, Times New Roman, no colour.
     """
     best_buf_label = identify_best_buffer(models)
 
-    fig, ax = plt.subplots(figsize=(13, 7))
+    # ── Publication style ──────────────────────────────────────────────
+    plt.rcParams.update({
+        "font.family":       "serif",
+        "font.serif":        ["Times New Roman", "Times", "DejaVu Serif"],
+        "font.size":         11,
+        "axes.linewidth":    0.8,
+        "xtick.direction":   "in",
+        "ytick.direction":   "in",
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "xtick.minor.width": 0.6,
+        "ytick.minor.width": 0.6,
+        "xtick.minor.visible": True,
+        "ytick.minor.visible": True,
+        "legend.frameon":    True,
+        "legend.edgecolor":  "black",
+        "legend.framealpha": 1.0,
+        "figure.dpi":        300,
+    })
+
+    fig, ax = plt.subplots(figsize=(7, 5))
 
     proxy_handles = {"benchmark": [], "buffer": []}
 
     for m in models:
-        is_best_buf = (m["label"] == best_buf_label)
-        size        = 280 if m["group"] == "benchmark" else 160
-        zorder      = 6  if m["group"] == "benchmark" else 5
-        fontweight  = "bold" if m["group"] == "benchmark" else "normal"
-        edgecolor   = "gold"  if is_best_buf else "black"
-        linewidth   = 2.0     if is_best_buf else 0.7
+        is_best_buf   = (m["label"] == best_buf_label)
+        is_benchmark  = (m["group"] == "benchmark")
 
-        ax.scatter(
-            m["n_params"],
-            m["best_acc"],
-            marker     = m["marker"],
-            color      = m["color"],
-            s          = size,
-            zorder     = zorder,
-            edgecolors = edgecolor,
-            linewidths = linewidth,
-        )
+        # Marker styling
+        if is_benchmark:
+            scatter_kw = dict(
+                marker     = "o",
+                facecolors = "black",
+                edgecolors = "black",
+                s          = 60,
+                linewidths = 0.8,
+                zorder     = 5,
+            )
+        else:
+            scatter_kw = dict(
+                marker     = "x",
+                facecolors = "none",     # 'x' ignores facecolor but kept for clarity
+                edgecolors = "black",
+                s          = 60,
+                linewidths = 1.2,
+                zorder     = 4,
+            )
+            if is_best_buf:
+                scatter_kw["s"]          = 80
+                scatter_kw["linewidths"] = 1.8
 
-        # Annotation — best buffer gets a star suffix
+        ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
+
+        # Annotation
         ann_label = f"{m['label']} ★" if is_best_buf else m["label"]
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
-            xytext     = (10, 6),
+            xytext     = (8, 4),
             textcoords = "offset points",
             fontsize   = 8,
-            color      = m["color"],
-            fontweight = fontweight,
+            color      = "black",
+            fontweight = "bold" if is_benchmark else "normal",
             clip_on    = False,
         )
 
-        # Proxy artist for legend
-        proxy = Line2D(
-            [], [],
-            marker          = m["marker"],
-            color           = "w",
-            markerfacecolor = m["color"],
-            markeredgecolor = edgecolor,
-            markeredgewidth = linewidth,
-            markersize      = 10 if m["group"] == "benchmark" else 8,
-            label           = ann_label,
-            linestyle       = "None",
-        )
+        # Proxy for legend
+        if is_benchmark:
+            proxy = Line2D(
+                [], [],
+                marker          = "o",
+                color           = "black",
+                markerfacecolor = "black",
+                markeredgecolor = "black",
+                markersize      = 6,
+                label           = m["label"],
+                linestyle       = "None",
+            )
+        else:
+            proxy = Line2D(
+                [], [],
+                marker          = "x",
+                color           = "black",
+                markerfacecolor = "none",
+                markeredgecolor = "black",
+                markersize      = 6,
+                label           = ann_label,
+                linestyle       = "None",
+                markeredgewidth = 1.2,
+            )
         proxy_handles[m["group"]].append(proxy)
 
     # ── Axes ──────────────────────────────────────────────────────────
-    ax.set_xscale("log")
-    ax.set_xlabel("Number of Parameters (log scale)", fontsize=13)
-    ax.set_ylabel("Best Test Accuracy (%)", fontsize=13)
+    ax.set_xscale("linear")
+    ax.set_xlabel("Number of Parameters", fontsize=12)
+    ax.set_ylabel("Highest Test Accuracy (%)", fontsize=12)
     ax.set_title(
-        f"Parameters vs Best Test Accuracy — {dataset.upper()}\n"
-        f"★ = best buffer strategy",
-        fontsize=14,
-        pad=14,
+        f"Comparison of Algorithm Performance on {dataset.upper()} Dataset",
+        fontsize=12,
+        pad=10,
     )
+
+    # Format x-axis ticks as integers with commas
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}")
     )
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
+
     ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
-    ax.grid(True, which="major", alpha=0.35, linestyle="--")
-    ax.grid(True, which="minor", alpha=0.12)
+    ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
 
-    # Faint horizontal guide lines
-    for m in models:
-        ax.axhline(
-            y         = m["best_acc"],
-            color     = m["color"],
-            alpha     = 0.10,
-            linewidth = 0.7,
-            linestyle = ":",
-            zorder    = 1,
-        )
+    ax.grid(False)  # No grid — cleaner publication look
 
-    # ── Legend — split by group ───────────────────────────────────────
-    sep = Line2D([0], [0], color="none")
+    # Light horizontal dashed reference lines at y-axis major ticks only
+    ax.set_axisbelow(True)
 
-    section_bm  = Line2D([0], [0], color="none",
-                         label="── Benchmark models ──")
-    section_buf = Line2D([0], [0], color="none",
-                         label="── Buffer strategies ──")
+    # ── Legend ────────────────────────────────────────────────────────
+    sep          = Line2D([0], [0], color="none")
+    section_bm   = Line2D([0], [0], color="none", label="Benchmark models")
+    section_buf  = Line2D([0], [0], color="none", label="Buffer strategies")
+
+    # Group headers as italic separators
+    from matplotlib.patches import Patch
+    header_bm  = Patch(facecolor="none", edgecolor="none",
+                        label="Benchmark models")
+    header_buf = Patch(facecolor="none", edgecolor="none",
+                        label="Buffer strategies")
 
     all_handles = (
-        [section_bm]  + proxy_handles["benchmark"] +
-        [sep, section_buf] + proxy_handles["buffer"]
+        [header_bm]  + proxy_handles["benchmark"] +
+        [sep, header_buf] + proxy_handles["buffer"]
     )
 
     leg = ax.legend(
         handles        = all_handles,
-        loc            = "center left",
-        bbox_to_anchor = (1.01, 0.5),
-        borderaxespad  = 0,
-        fontsize       = 9,
+        loc            = "lower right",
+        fontsize       = 8,
         frameon        = True,
-        framealpha     = 0.95,
-        edgecolor      = "#cccccc",
-        handlelength   = 1.5,
+        framealpha     = 1.0,
+        edgecolor      = "black",
+        handlelength   = 1.2,
+        borderpad      = 0.6,
+        labelspacing   = 0.4,
     )
     for text in leg.get_texts():
-        if text.get_text().startswith("──"):
-            text.set_color("grey")
+        if text.get_text() in ("Benchmark models", "Buffer strategies"):
             text.set_style("italic")
-            text.set_fontsize(8)
+            text.set_color("grey")
 
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
     plt.close(fig)
+
+    # Reset rcParams to avoid affecting other plots
+    plt.rcParams.update(plt.rcParamsDefault)
+
     print(f"  Saved: {output_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 2 — SUMMARY TABLE
+# PLOT 2 — SUMMARY TABLE  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_benchmark_table(models: list,
                          dataset: str,
                          top_k: int,
                          output_path: str):
-    """
-    Columns:
-        Rank | Model | Group | Parameters | Best acc | Top-k avg
-             | Epoch of best | Avg peak mem (MB) | Avg epoch time (s)
-
-    Sorted by best accuracy descending.
-    Best model row — gold. Best buffer row — light pink outline.
-    """
     best_buf_label = identify_best_buffer(models)
 
     rows_raw = []
@@ -314,7 +348,7 @@ def plot_benchmark_table(models: list,
 
         rows_raw.append((m["best_acc"], m["color"], m["label"],
                          m["group"], [
-            "",                              # rank — filled below
+            "",
             m["label"],
             m["group"].capitalize(),
             f"{m['n_params']:,}",
@@ -327,20 +361,13 @@ def plot_benchmark_table(models: list,
 
     rows_raw.sort(key=lambda x: x[0], reverse=True)
 
-    # Fill rank
     for rank, row in enumerate(rows_raw, 1):
         row[4][0] = str(rank)
 
     col_labels = [
-        "Rank",
-        "Model",
-        "Group",
-        "Parameters",
-        "Best acc (%)",
-        f"Top-{top_k} avg (%)",
-        "Epoch of best",
-        "Avg peak mem (MB)",
-        "Avg epoch time (s)",
+        "Rank", "Model", "Group", "Parameters",
+        "Best acc (%)", f"Top-{top_k} avg (%)",
+        "Epoch of best", "Avg peak mem (MB)", "Avg epoch time (s)",
     ]
     table_rows = [r[4] for r in rows_raw]
     n_rows     = len(table_rows)
@@ -358,31 +385,26 @@ def plot_benchmark_table(models: list,
     tbl.set_fontsize(9)
     tbl.auto_set_column_width(col=list(range(len(col_labels))))
 
-    # Header
     for j in range(len(col_labels)):
         tbl[0, j].set_facecolor("#1a6b3a")
         tbl[0, j].set_text_props(color="white", fontweight="bold")
 
     for i, (_, color, label, group, _) in enumerate(rows_raw):
         row_idx = i + 1
-
-        # Background
         if i == 0:
-            fc = "#fff3b0"   # gold — overall best
+            fc = "#fff3b0"
         elif label == best_buf_label:
-            fc = "#ffe0e0"   # light pink — best buffer
+            fc = "#ffe0e0"
         else:
             fc = "#f5f5f5" if i % 2 == 0 else "white"
 
         for j in range(len(col_labels)):
             tbl[row_idx, j].set_facecolor(fc)
 
-        # Bold for top row
         if i == 0:
             for j in range(len(col_labels)):
                 tbl[row_idx, j].set_text_props(fontweight="bold")
 
-        # Model name column coloured to match scatter
         tbl[row_idx, 1].set_text_props(color=color, fontweight="bold")
 
     ax.set_title(
@@ -423,9 +445,8 @@ def print_summary(models: list, top_k: int):
 
 def main():
 
-    # ── CONFIGURATION ─────────────────────────────────────────────────
-    DATASET = "shd"    # "shd" | "ssc" | "dvs"
-    TOP_K   = 10       # top-k epochs for average accuracy
+    DATASET = "shd"
+    TOP_K   = 10
 
     BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
     OUTPUT_DIR   = os.path.join(
@@ -440,7 +461,6 @@ def main():
     print(f"  Output dir        : {OUTPUT_DIR}")
     print(f"{'='*60}")
 
-    # ── LOAD ──────────────────────────────────────────────────────────
     models = load_all_models(BASE_RESULTS, DATASET)
 
     if not models:
@@ -449,7 +469,6 @@ def main():
 
     print_summary(models, TOP_K)
 
-    # ── PLOT ──────────────────────────────────────────────────────────
     print("  Generating plots ...")
 
     plot_benchmark_scatter(
@@ -460,12 +479,10 @@ def main():
         models, DATASET, TOP_K,
         os.path.join(OUTPUT_DIR, "benchmark_scatter_table.png"),
     )
-    # ── Push plots to GitHub repo ─────────────────────────────────────
-    
+
     REPO_PLOTS = "/rds/general/user/ak2721/home/SNN_FYP/results_plots"
     os.makedirs(REPO_PLOTS, exist_ok=True)
 
-    # Copy plots into the repo
     for fname in ["benchmark_scatter.png", "benchmark_scatter_table.png"]:
         src = os.path.join(OUTPUT_DIR, fname)
         dst = os.path.join(REPO_PLOTS, f"{DATASET}_{fname}")
@@ -474,7 +491,6 @@ def main():
             shutil.copy2(src, dst)
             print(f"  Copied to repo: {dst}")
 
-    # Git add, commit, push
     subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
                     "add", "results_plots/"], check=False)
     subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
