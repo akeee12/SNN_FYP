@@ -11,7 +11,7 @@ Exact RDS paths as found 25/05/2026:
     exponential_tap/v1        → Exponential buffer         (83.88%)
     linear_tap/v1             → Linear buffer              (88.74%)
     log_buffer_snntorch/v2    → Log buffer                 (90.72%)
-    power_law_tap/v1          → Power-law buffer (γ=2)     (91.17%) ← best buffer
+    power_law_tap/v1          → Power-law buffer (γ=2)     (91.17%)
     random_tap/v1             → Random buffer              (84.36%)
 
 three_factor_delay excluded — no trained results.
@@ -48,26 +48,26 @@ MODEL_PATH_MAP = {
     "shd": [
         # ── Benchmark models — distinct professional colours, circles ──
         ("aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
-         "AAD SNNTorch",          "o", "#2166ac", "benchmark"),  # blue
+         "AAD SNNTorch",          "o", "#2166ac", "benchmark"),
         ("cadlif/v2/cAdLIF_summary.json",
-         "CaDLIF",                "o", "#d6604d", "benchmark"),  # red
+         "CaDLIF",                "o", "#d6604d", "benchmark"),
         ("dcls/DCLS_summary.json",
-         "DCLS",                  "o", "#4dac26", "benchmark"),  # green
+         "DCLS",                  "o", "#4dac26", "benchmark"),
         ("dhlif/v1/DHLIF_summary.json",
-         "DHLIF",                 "o", "#8073ac", "benchmark"),  # purple
+         "DHLIF",                 "o", "#8073ac", "benchmark"),
         ("event_ssm/v1/event_ssm_summary.json",
-         "Event SSM",             "o", "#e08214", "benchmark"),  # amber
+         "Event SSM",             "o", "#e08214", "benchmark"),
         # ── Buffer strategies — same muted colour, distinct markers ───
         ("exponential_tap/v1/ExponentialTapAADSNNTorch_summary.json",
-         "Exponential buffer",    "^", "#555555", "buffer"),     # triangle up
+         "Exponential buffer",    "^", "#555555", "buffer"),
         ("linear_tap/v1/LinearTapAADSNNTorch_summary.json",
-         "Linear buffer",         "s", "#555555", "buffer"),     # square
+         "Linear buffer",         "s", "#555555", "buffer"),
         ("log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
-         "Log buffer",            "D", "#555555", "buffer"),     # diamond
+         "Log buffer",            "D", "#555555", "buffer"),
         ("power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
-         "Power-law buffer (y=2)","v", "#555555", "buffer"),     # triangle down
+         "Power-law buffer (y=2)","v", "#555555", "buffer"),
         ("random_tap/v1/RandomTapAADSNNTorch_summary.json",
-         "Random buffer",         "P", "#555555", "buffer"),     # plus filled
+         "Random buffer",         "P", "#555555", "buffer"),
     ],
     "ssc": [],
     "dvs": [],
@@ -149,6 +149,7 @@ def identify_best_buffer(models: list) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOT 1 — SCATTER
 # ─────────────────────────────────────────────────────────────────────────────
+
 def plot_benchmark_scatter(models: list,
                            dataset: str,
                            output_path: str):
@@ -173,7 +174,6 @@ def plot_benchmark_scatter(models: list,
         "figure.dpi":          300,
     })
 
-    # Extra right margin for outside legend
     fig, ax = plt.subplots(figsize=(9, 5))
 
     proxy_handles = {"benchmark": [], "buffer": []}
@@ -203,35 +203,18 @@ def plot_benchmark_scatter(models: list,
 
         ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
 
-                # Annotation — use (best) instead of star to avoid glyph issues
-        # Replace the single ax.annotate call with this:
-        offsets = {
-            "AAD SNNTorch":            (  8,   4),
-            "CaDLIF":                  (  8,  -14),  # push below to avoid DHLIF
-            "DCLS":                    ( -55,  -14), # left and below the dot
-            "DHLIF":                   (  8,   4),
-            "Event SSM":               (  8,   4),
-            "Exponential buffer":      (  8,  -12),
-            "Linear buffer":           (  8,   4),
-            "Log buffer":              (  8,  -12),  # below to avoid Power-law
-            "Power-law buffer (y=2)":  (  8,   4),   # right — it's top left so room exists
-            "Random buffer":           (  8,   4),
-        }
-        dx, dy = offsets.get(m["label"], (8, 4))
-        ann_label = f"{m['label']}*" if is_best_buf else m["label"]
+        ann_label = m["label"]
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
-            xytext     = (dx, dy),
+            xytext     = (6, 6),
             textcoords = "offset points",
             fontsize   = 7.5,
             color      = m["color"],
             fontweight = "bold" if is_benchmark else "normal",
-            clip_on    = True,   # ← change False to True to clip at axes boundary
+            clip_on    = True,
         )
 
-
-        # Legend proxy
         proxy = Line2D(
             [], [],
             marker          = "o" if is_benchmark else m["marker"],
@@ -245,7 +228,6 @@ def plot_benchmark_scatter(models: list,
         )
         proxy_handles[m["group"]].append(proxy)
 
-    # ── Axes ──────────────────────────────────────────────────────────
     ax.set_xscale("linear")
     ax.set_xlabel("Number of Parameters", fontsize=12)
     ax.set_ylabel("Highest Test Accuracy (%)", fontsize=12)
@@ -262,7 +244,19 @@ def plot_benchmark_scatter(models: list,
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.grid(False)
 
-    # ── Legend outside right ──────────────────────────────────────────
+    # Increase axis limits slightly for clearer spacing
+    x_vals = [m["n_params"] for m in models]
+    y_vals = [m["best_acc"] for m in models]
+
+    x_min, x_max = min(x_vals), max(x_vals)
+    y_min, y_max = min(y_vals), max(y_vals)
+
+    x_pad = 0.08 * (x_max - x_min) if x_max > x_min else 1000
+    y_pad = 0.05 * (y_max - y_min) if y_max > y_min else 1.0
+
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
     from matplotlib.patches import Patch
     sep        = Line2D([0], [0], color="none", label=" ")
     header_bm  = Patch(facecolor="none", edgecolor="none",
@@ -271,7 +265,7 @@ def plot_benchmark_scatter(models: list,
                        label="Buffer strategies")
 
     all_handles = (
-        [header_bm]  + proxy_handles["benchmark"] +
+        [header_bm] + proxy_handles["benchmark"] +
         [sep, header_buf] + proxy_handles["buffer"]
     )
 
@@ -288,9 +282,7 @@ def plot_benchmark_scatter(models: list,
         borderpad      = 0.7,
         labelspacing   = 0.5,
     )
-    fig.text(0.13, 0.01, "* Best performing buffer strategy.",
-            fontsize=7.5, color="#555555", fontstyle="italic",
-            fontfamily="serif")
+
     for text in leg.get_texts():
         if text.get_text() in ("Benchmark models", "Buffer strategies"):
             text.set_style("italic")
@@ -304,8 +296,9 @@ def plot_benchmark_scatter(models: list,
     plt.rcParams.update(plt.rcParamsDefault)
     print(f"  Saved: {output_path}")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 2 — SUMMARY TABLE  (unchanged)
+# PLOT 2 — SUMMARY TABLE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_benchmark_table(models: list,
@@ -472,7 +465,7 @@ def main():
                     "add", "results_plots/"], check=False)
     subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
                     "commit", "-m", f"add benchmark scatter plots [{DATASET}]"],
-                check=False)
+                   check=False)
     subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
                     "push", "origin", "main"], check=False)
     print("  Plots pushed to GitHub.")
@@ -483,4 +476,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
