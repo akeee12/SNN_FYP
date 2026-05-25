@@ -208,16 +208,7 @@ def plot_benchmark_scatter(models: list,
         ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
 
         ann_label = m["label"]
-        ax.annotate(
-            ann_label,
-            xy         = (m["n_params"], m["best_acc"]),
-            xytext     = (dx, dy),
-            textcoords = "offset points",
-            fontsize   = 7.5,
-            color      = m["color"],
-            fontweight = "bold" if is_benchmark else "normal",
-            clip_on    = True,
-        )
+    
 
         proxy = Line2D(
             [], [],
