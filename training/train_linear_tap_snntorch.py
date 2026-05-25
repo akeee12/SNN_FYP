@@ -188,7 +188,7 @@ DATASET_DEFAULTS = {
     "ssc": dict(n_inputs=700,  n_outputs=35,
                 time_steps=400, max_time=1.0),
     "dvs": dict(n_inputs=2048, n_outputs=11,
-                time_steps=300, max_time=3704997.0),
+                time_steps=300, max_time=11935114.0),
 }
 
 DATASET_CLASSES = {
