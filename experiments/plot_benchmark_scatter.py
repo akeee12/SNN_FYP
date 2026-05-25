@@ -46,30 +46,29 @@ sys.path.insert(0, ROOT)
 
 MODEL_PATH_MAP = {
     "shd": [
-        # ── Benchmark models (circles) ────────────────────────────────
+        # ── Benchmark models — distinct professional colours, circles ──
         ("aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
-         "AAD SNNTorch",          "o", "black", "benchmark"),
+         "AAD SNNTorch",          "o", "#2166ac", "benchmark"),  # blue
         ("cadlif/v2/cAdLIF_summary.json",
-         "CaDLIF",                "o", "black", "benchmark"),
+         "CaDLIF",                "o", "#d6604d", "benchmark"),  # red
         ("dcls/DCLS_summary.json",
-         "DCLS",                  "o", "black", "benchmark"),
+         "DCLS",                  "o", "#4dac26", "benchmark"),  # green
         ("dhlif/v1/DHLIF_summary.json",
-         "DHLIF",                 "o", "black", "benchmark"),
+         "DHLIF",                 "o", "#8073ac", "benchmark"),  # purple
         ("event_ssm/v1/event_ssm_summary.json",
-         "Event SSM",             "o", "black", "benchmark"),
-        # ── Buffer strategies (crosses) ───────────────────────────────
+         "Event SSM",             "o", "#e08214", "benchmark"),  # amber
+        # ── Buffer strategies — same muted colour, distinct markers ───
         ("exponential_tap/v1/ExponentialTapAADSNNTorch_summary.json",
-         "Exponential buffer",    "x", "black", "buffer"),
+         "Exponential buffer",    "^", "#555555", "buffer"),     # triangle up
         ("linear_tap/v1/LinearTapAADSNNTorch_summary.json",
-         "Linear buffer",         "x", "black", "buffer"),
+         "Linear buffer",         "s", "#555555", "buffer"),     # square
         ("log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
-         "Log buffer",            "x", "black", "buffer"),
+         "Log buffer",            "D", "#555555", "buffer"),     # diamond
         ("power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
-         "Power-law buffer (γ=2)","x", "black", "buffer"),
+         "Power-law buffer (y=2)","v", "#555555", "buffer"),     # triangle down
         ("random_tap/v1/RandomTapAADSNNTorch_summary.json",
-         "Random buffer",         "x", "black", "buffer"),
+         "Random buffer",         "P", "#555555", "buffer"),     # plus filled
     ],
-    # ── Add ssc / dvs entries here when trained ───────────────────────
     "ssc": [],
     "dvs": [],
 }
@@ -150,112 +149,85 @@ def identify_best_buffer(models: list) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOT 1 — SCATTER
 # ─────────────────────────────────────────────────────────────────────────────
-
 def plot_benchmark_scatter(models: list,
                            dataset: str,
                            output_path: str):
-    """
-    X : number of parameters (linear scale)
-    Y : highest test accuracy (%)
-
-    Benchmark models  — filled circles (○), size 100
-    Buffer strategies — crosses (×), size 100
-    Best buffer       — annotated with ★
-
-    Publication-quality styling: black/white, Times New Roman, no colour.
-    """
     best_buf_label = identify_best_buffer(models)
 
-    # ── Publication style ──────────────────────────────────────────────
     plt.rcParams.update({
-        "font.family":       "serif",
-        "font.serif":        ["Times New Roman", "Times", "DejaVu Serif"],
-        "font.size":         11,
-        "axes.linewidth":    0.8,
-        "xtick.direction":   "in",
-        "ytick.direction":   "in",
-        "xtick.major.width": 0.8,
-        "ytick.major.width": 0.8,
-        "xtick.minor.width": 0.6,
-        "ytick.minor.width": 0.6,
+        "font.family":         "serif",
+        "font.serif":          ["Times New Roman", "Times", "DejaVu Serif"],
+        "font.size":           11,
+        "axes.linewidth":      0.8,
+        "xtick.direction":     "in",
+        "ytick.direction":     "in",
+        "xtick.major.width":   0.8,
+        "ytick.major.width":   0.8,
+        "xtick.minor.width":   0.6,
+        "ytick.minor.width":   0.6,
         "xtick.minor.visible": True,
         "ytick.minor.visible": True,
-        "legend.frameon":    True,
-        "legend.edgecolor":  "black",
-        "legend.framealpha": 1.0,
-        "figure.dpi":        300,
+        "legend.frameon":      True,
+        "legend.edgecolor":    "black",
+        "legend.framealpha":   1.0,
+        "figure.dpi":          300,
     })
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    # Extra right margin for outside legend
+    fig, ax = plt.subplots(figsize=(9, 5))
 
     proxy_handles = {"benchmark": [], "buffer": []}
 
     for m in models:
-        is_best_buf   = (m["label"] == best_buf_label)
-        is_benchmark  = (m["group"] == "benchmark")
+        is_best_buf  = (m["label"] == best_buf_label)
+        is_benchmark = (m["group"] == "benchmark")
 
-        # Marker styling
         if is_benchmark:
             scatter_kw = dict(
                 marker     = "o",
-                facecolors = "black",
-                edgecolors = "black",
-                s          = 60,
+                facecolors = m["color"],
+                edgecolors = m["color"],
+                s          = 80,
                 linewidths = 0.8,
                 zorder     = 5,
             )
         else:
             scatter_kw = dict(
-                marker     = "x",
-                facecolors = "none",     # 'x' ignores facecolor but kept for clarity
-                edgecolors = "black",
-                s          = 60,
-                linewidths = 1.2,
+                marker     = m["marker"],
+                facecolors = m["color"],
+                edgecolors = m["color"],
+                s          = 70 if not is_best_buf else 90,
+                linewidths = 0.8,
                 zorder     = 4,
             )
-            if is_best_buf:
-                scatter_kw["s"]          = 80
-                scatter_kw["linewidths"] = 1.8
 
         ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
 
-        # Annotation
-        ann_label = f"{m['label']} ★" if is_best_buf else m["label"]
+        # Annotation — use (best) instead of star to avoid glyph issues
+        ann_label = f"{m['label']} (best)" if is_best_buf else m["label"]
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
             xytext     = (8, 4),
             textcoords = "offset points",
-            fontsize   = 8,
-            color      = "black",
+            fontsize   = 7.5,
+            color      = m["color"],
             fontweight = "bold" if is_benchmark else "normal",
             clip_on    = False,
         )
 
-        # Proxy for legend
-        if is_benchmark:
-            proxy = Line2D(
-                [], [],
-                marker          = "o",
-                color           = "black",
-                markerfacecolor = "black",
-                markeredgecolor = "black",
-                markersize      = 6,
-                label           = m["label"],
-                linestyle       = "None",
-            )
-        else:
-            proxy = Line2D(
-                [], [],
-                marker          = "x",
-                color           = "black",
-                markerfacecolor = "none",
-                markeredgecolor = "black",
-                markersize      = 6,
-                label           = ann_label,
-                linestyle       = "None",
-                markeredgewidth = 1.2,
-            )
+        # Legend proxy
+        proxy = Line2D(
+            [], [],
+            marker          = "o" if is_benchmark else m["marker"],
+            color           = "w",
+            markerfacecolor = m["color"],
+            markeredgecolor = m["color"],
+            markersize      = 7 if is_benchmark else 6,
+            label           = ann_label,
+            linestyle       = "None",
+            markeredgewidth = 0.8,
+        )
         proxy_handles[m["group"]].append(proxy)
 
     # ── Axes ──────────────────────────────────────────────────────────
@@ -267,32 +239,21 @@ def plot_benchmark_scatter(models: list,
         fontsize=12,
         pad=10,
     )
-
-    # Format x-axis ticks as integers with commas
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}")
     )
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
-
     ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
+    ax.grid(False)
 
-    ax.grid(False)  # No grid — cleaner publication look
-
-    # Light horizontal dashed reference lines at y-axis major ticks only
-    ax.set_axisbelow(True)
-
-    # ── Legend ────────────────────────────────────────────────────────
-    sep          = Line2D([0], [0], color="none")
-    section_bm   = Line2D([0], [0], color="none", label="Benchmark models")
-    section_buf  = Line2D([0], [0], color="none", label="Buffer strategies")
-
-    # Group headers as italic separators
+    # ── Legend outside right ──────────────────────────────────────────
     from matplotlib.patches import Patch
+    sep        = Line2D([0], [0], color="none", label=" ")
     header_bm  = Patch(facecolor="none", edgecolor="none",
-                        label="Benchmark models")
+                       label="Benchmark models")
     header_buf = Patch(facecolor="none", edgecolor="none",
-                        label="Buffer strategies")
+                       label="Buffer strategies")
 
     all_handles = (
         [header_bm]  + proxy_handles["benchmark"] +
@@ -301,30 +262,29 @@ def plot_benchmark_scatter(models: list,
 
     leg = ax.legend(
         handles        = all_handles,
-        loc            = "lower right",
-        fontsize       = 8,
+        loc            = "upper left",
+        bbox_to_anchor = (1.02, 1.0),
+        borderaxespad  = 0,
+        fontsize       = 8.5,
         frameon        = True,
         framealpha     = 1.0,
         edgecolor      = "black",
         handlelength   = 1.2,
-        borderpad      = 0.6,
-        labelspacing   = 0.4,
+        borderpad      = 0.7,
+        labelspacing   = 0.5,
     )
     for text in leg.get_texts():
         if text.get_text() in ("Benchmark models", "Buffer strategies"):
             text.set_style("italic")
-            text.set_color("grey")
+            text.set_fontweight("bold")
+            text.set_color("black")
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close(fig)
-
-    # Reset rcParams to avoid affecting other plots
     plt.rcParams.update(plt.rcParamsDefault)
-
     print(f"  Saved: {output_path}")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOT 2 — SUMMARY TABLE  (unchanged)
