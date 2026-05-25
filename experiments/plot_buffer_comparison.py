@@ -25,6 +25,7 @@ Outputs:
 """
 
 import os
+import subprocess
 import sys
 import json
 import glob
@@ -459,6 +460,29 @@ def main():
         models, DATASET, TOP_K,
         os.path.join(OUTPUT_DIR, "benchmark_scatter_table.png"),
     )
+    # ── Push plots to GitHub repo ─────────────────────────────────────
+    
+    REPO_PLOTS = "/rds/general/user/ak2721/home/SNN_FYP/results_plots"
+    os.makedirs(REPO_PLOTS, exist_ok=True)
+
+    # Copy plots into the repo
+    for fname in ["benchmark_scatter.png", "benchmark_scatter_table.png"]:
+        src = os.path.join(OUTPUT_DIR, fname)
+        dst = os.path.join(REPO_PLOTS, f"{DATASET}_{fname}")
+        if os.path.isfile(src):
+            import shutil
+            shutil.copy2(src, dst)
+            print(f"  Copied to repo: {dst}")
+
+    # Git add, commit, push
+    subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
+                    "add", "results_plots/"], check=False)
+    subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
+                    "commit", "-m", f"add benchmark scatter plots [{DATASET}]"],
+                check=False)
+    subprocess.run(["git", "-C", "/rds/general/user/ak2721/home/SNN_FYP",
+                    "push", "origin", "main"], check=False)
+    print("  Plots pushed to GitHub.")
 
     print(f"\n{'='*60}")
     print(f"  Done. Outputs: {OUTPUT_DIR}")
