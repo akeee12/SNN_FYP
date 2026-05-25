@@ -27,7 +27,6 @@ import os
 import subprocess
 import sys
 import json
-import glob
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -65,7 +64,7 @@ MODEL_PATH_MAP = {
         ("log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
          "Log buffer",            "D", "#555555", "buffer"),
         ("power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
-         "Power-law buffer (y=2)","v", "#555555", "buffer"),
+         "Power-law buffer (y=2)", "*", "#555555", "buffer"),
         ("random_tap/v1/RandomTapAADSNNTorch_summary.json",
          "Random buffer",         "P", "#555555", "buffer"),
     ],
@@ -177,6 +176,8 @@ def plot_benchmark_scatter(models: list,
     fig, ax = plt.subplots(figsize=(9, 5))
 
     proxy_handles = {"benchmark": [], "buffer": []}
+    buffer_offsets = [(6, 12), (6, -12), (10, 16), (10, -16), (14, 8)]
+    buf_i = 0
 
     for m in models:
         is_best_buf  = (m["label"] == best_buf_label)
@@ -191,15 +192,18 @@ def plot_benchmark_scatter(models: list,
                 linewidths = 0.8,
                 zorder     = 5,
             )
+            dx, dy = (8, 6)
         else:
             scatter_kw = dict(
                 marker     = m["marker"],
-                facecolors = m["color"],
+                facecolors = m["color"] if m["marker"] != "*" else "none",
                 edgecolors = m["color"],
-                s          = 70 if not is_best_buf else 90,
-                linewidths = 0.8,
+                s          = 70 if not is_best_buf else 120,
+                linewidths = 1.2 if m["marker"] == "*" else 0.8,
                 zorder     = 4,
             )
+            dx, dy = buffer_offsets[buf_i % len(buffer_offsets)]
+            buf_i += 1
 
         ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
 
@@ -207,7 +211,7 @@ def plot_benchmark_scatter(models: list,
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
-            xytext     = (6, 6),
+            xytext     = (dx, dy),
             textcoords = "offset points",
             fontsize   = 7.5,
             color      = m["color"],
@@ -219,12 +223,12 @@ def plot_benchmark_scatter(models: list,
             [], [],
             marker          = "o" if is_benchmark else m["marker"],
             color           = "w",
-            markerfacecolor = m["color"],
+            markerfacecolor = m["color"] if (is_benchmark or m["marker"] != "*") else "none",
             markeredgecolor = m["color"],
-            markersize      = 7 if is_benchmark else 6,
+            markersize      = 7 if is_benchmark else (9 if m["marker"] == "*" else 6),
             label           = ann_label,
             linestyle       = "None",
-            markeredgewidth = 0.8,
+            markeredgewidth = 1.2 if m["marker"] == "*" else 0.8,
         )
         proxy_handles[m["group"]].append(proxy)
 
@@ -236,6 +240,7 @@ def plot_benchmark_scatter(models: list,
         fontsize=12,
         pad=10,
     )
+
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}")
     )
@@ -244,18 +249,12 @@ def plot_benchmark_scatter(models: list,
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.grid(False)
 
-    # Increase axis limits slightly for clearer spacing
     x_vals = [m["n_params"] for m in models]
-    y_vals = [m["best_acc"] for m in models]
-
     x_min, x_max = min(x_vals), max(x_vals)
-    y_min, y_max = min(y_vals), max(y_vals)
-
-    x_pad = 0.08 * (x_max - x_min) if x_max > x_min else 1000
-    y_pad = 0.05 * (y_max - y_min) if y_max > y_min else 1.0
+    x_pad = 0.10 * (x_max - x_min) if x_max > x_min else 1000
 
     ax.set_xlim(x_min - x_pad, x_max + x_pad)
-    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+    ax.set_ylim(68, 100)
 
     from matplotlib.patches import Patch
     sep        = Line2D([0], [0], color="none", label=" ")
