@@ -254,7 +254,7 @@ def plot_benchmark_scatter(models: list,
     x_pad = 0.10 * (x_max - x_min) if x_max > x_min else 1000
 
     ax.set_xlim(x_min - x_pad, x_max + x_pad)
-    ax.set_ylim(68, 100)
+    ax.set_ylim(68, 93)
 
     from matplotlib.patches import Patch
     sep        = Line2D([0], [0], color="none", label=" ")
