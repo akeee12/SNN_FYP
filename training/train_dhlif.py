@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(ROOT, "models"))
 
 from configs import get_config
 from utils.seed import set_seed
-from experiments.results_logger import ResultsLogger
+from CODE.SNN_FYP.experiments.plot_buffer_comparison import ResultsLogger
 from dhlif_model import DHLIFNet
 
 
