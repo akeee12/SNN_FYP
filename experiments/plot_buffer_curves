@@ -1,0 +1,334 @@
+# experiments/plot_buffer_curves.py
+"""
+Per-epoch test accuracy and train loss curves for all buffer strategies
+on SHD, with AAD V2 SNNTorch overlaid as the baseline.
+
+Outputs:
+    plots/shd/buffer_accuracy_curves.png
+    plots/shd/buffer_loss_curves.png
+
+"""
+
+import os
+import sys
+import json
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXACT PATH MAP — matched to your RDS directory structure
+# (relative to BASE_RESULTS, label, color, linestyle, marker)
+# ─────────────────────────────────────────────────────────────────────────────
+
+BASELINE = (
+    "aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
+    "AAD V2 SNNTorch (baseline)",
+    "#333333",   # dark grey
+    "-",
+    "o",
+)
+
+BUFFER_MODELS = [
+    (
+        "log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
+        "Log buffer",
+        "#2166ac",   # strong blue
+        "-",
+        "s",
+    ),
+    (
+        "linear_tap/v1/LinearTapAADSNNTorch_summary.json",
+        "Linear buffer",
+        "#d6604d",   # muted red
+        "--",
+        "^",
+    ),
+    (
+        "exponential_tap/v1/ExponentialTapAADSNNTorch_summary.json",
+        "Exponential buffer",
+        "#4dac26",   # muted green
+        "-.",
+        "D",
+    ),
+    (
+        "power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
+        "Power-law buffer (\u03b3=2)",
+        "#8073ac",   # muted purple
+        ":",
+        "v",
+    ),
+    (
+        "random_tap/v1/RandomTapAADSNNTorch_summary.json",
+        "Random buffer",
+        "#e08214",   # muted orange
+        (0, (5, 2)),
+        "x",
+    ),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MATPLOTLIB STYLE — academic
+# ─────────────────────────────────────────────────────────────────────────────
+
+def set_style():
+    plt.rcParams.update({
+        "font.family"       : "serif",
+        "font.size"         : 11,
+        "axes.titlesize"    : 12,
+        "axes.labelsize"    : 11,
+        "xtick.labelsize"   : 10,
+        "ytick.labelsize"   : 10,
+        "legend.fontsize"   : 9,
+        "figure.dpi"        : 150,
+        "axes.spines.top"   : False,
+        "axes.spines.right" : False,
+        "axes.grid"         : True,
+        "grid.alpha"        : 0.3,
+        "grid.linestyle"    : "--",
+        "grid.linewidth"    : 0.6,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOADER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_summary(results_root, rel_path, label):
+    full_path = os.path.join(results_root, rel_path)
+    if not os.path.isfile(full_path):
+        print(f"  [SKIP] {label:<40} -- not found: {full_path}")
+        return None
+    try:
+        with open(full_path) as f:
+            s = json.load(f)
+        best   = s.get("best_acc", 0.0) * 100.0
+        epochs = len(s.get("test_accs", []))
+        print(f"  [LOAD] {label:<40}  best={best:.2f}%  epochs={epochs}")
+        return s
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  [SKIP] {label:<40} -- read error: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMOOTHING — light Gaussian smooth for cleaner curves
+# ─────────────────────────────────────────────────────────────────────────────
+
+def smooth(values, window=5):
+    if len(values) < window:
+        return values
+    kernel = np.ones(window) / window
+    padded = np.pad(values, (window // 2, window // 2), mode="edge")
+    return np.convolve(padded, kernel, mode="valid")[:len(values)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLOT 1 — TEST ACCURACY CURVES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_accuracy_curves(baseline_entry, buffer_entries,
+                         n_epochs, dataset, output_path):
+    """
+    One panel. AAD V2 SNNTorch as dark grey dashed baseline.
+    Each buffer strategy in a distinct academic colour.
+    Raw curve faint, smoothed curve bold.
+    Legend outside right.
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    def _plot_model(summary, label, color, ls, marker, is_baseline=False):
+        accs = summary.get("test_accs", [])
+        if not accs:
+            return
+        accs   = [a * 100.0 for a in accs[:n_epochs]]
+        epochs = list(range(1, len(accs) + 1))
+        smoothed = smooth(np.array(accs), window=7)
+
+        # Raw — very faint
+        ax.plot(epochs, accs,
+                color=color, alpha=0.15, linewidth=0.8,
+                linestyle=ls, zorder=2)
+
+        # Smoothed — bold
+        lw   = 2.2 if not is_baseline else 1.8
+        me   = max(1, len(epochs) // 8)
+        ax.plot(epochs, smoothed,
+                color=color, linewidth=lw,
+                linestyle=ls if not is_baseline else "--",
+                marker=marker,
+                markevery=me, markersize=5,
+                markeredgewidth=0.6,
+                markeredgecolor="white" if not is_baseline else color,
+                label=f"{label}  (best={max(accs):.1f}%)",
+                zorder=3)
+
+    # Baseline first so it sits behind buffer curves
+    rel_path, label, color, ls, marker = baseline_entry
+    base_summary = load_summary(
+        "/rds/general/user/ak2721/home/results/SNN_FYP",
+        rel_path, label
+    )
+    if base_summary:
+        _plot_model(base_summary, label, color, ls, marker, is_baseline=True)
+
+    # Buffer strategies
+    for rel_path, label, color, ls, marker in buffer_entries:
+        summary = load_summary(
+            "/rds/general/user/ak2721/home/results/SNN_FYP",
+            rel_path, label
+        )
+        if summary:
+            _plot_model(summary, label, color, ls, marker)
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Test Accuracy (%)")
+    ax.set_title(
+        f"Test Accuracy per Epoch — SHD\n"
+        f"Buffer strategies vs AAD V2 SNNTorch baseline",
+        pad=10,
+    )
+    ax.set_xlim(1, n_epochs)
+    ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+    ax.grid(True, which="minor", alpha=0.12, linestyle=":")
+
+    leg = ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        borderaxespad=0,
+        frameon=True,
+        framealpha=0.95,
+        edgecolor="#cccccc",
+        handlelength=2.5,
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLOT 2 — TRAIN LOSS CURVES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_loss_curves(baseline_entry, buffer_entries,
+                     n_epochs, dataset, output_path):
+    """
+    Same layout as accuracy plot but for train loss.
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    def _plot_model(summary, label, color, ls, marker, is_baseline=False):
+        losses = summary.get("train_losses", [])
+        if not losses:
+            return
+        losses = losses[:n_epochs]
+        epochs = list(range(1, len(losses) + 1))
+        smoothed = smooth(np.array(losses), window=7)
+
+        ax.plot(epochs, losses,
+                color=color, alpha=0.15, linewidth=0.8,
+                linestyle=ls, zorder=2)
+
+        lw = 2.2 if not is_baseline else 1.8
+        me = max(1, len(epochs) // 8)
+        ax.plot(epochs, smoothed,
+                color=color, linewidth=lw,
+                linestyle=ls if not is_baseline else "--",
+                marker=marker,
+                markevery=me, markersize=5,
+                markeredgewidth=0.6,
+                markeredgecolor="white" if not is_baseline else color,
+                label=label,
+                zorder=3)
+
+    rel_path, label, color, ls, marker = baseline_entry
+    base_summary = load_summary(
+        "/rds/general/user/ak2721/home/results/SNN_FYP",
+        rel_path, label
+    )
+    if base_summary:
+        _plot_model(base_summary, label, color, ls, marker, is_baseline=True)
+
+    for rel_path, label, color, ls, marker in buffer_entries:
+        summary = load_summary(
+            "/rds/general/user/ak2721/home/results/SNN_FYP",
+            rel_path, label
+        )
+        if summary:
+            _plot_model(summary, label, color, ls, marker)
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Training Loss")
+    ax.set_title(
+        f"Training Loss per Epoch — SHD\n"
+        f"Buffer strategies vs AAD V2 SNNTorch baseline",
+        pad=10,
+    )
+    ax.set_xlim(1, n_epochs)
+    ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+    ax.grid(True, which="minor", alpha=0.12, linestyle=":")
+
+    leg = ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        borderaxespad=0,
+        frameon=True,
+        framealpha=0.95,
+        edgecolor="#cccccc",
+        handlelength=2.5,
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+
+    # ── CONFIGURATION ─────────────────────────────────────────────────
+    DATASET      = "shd"
+    N_EPOCHS     = 500     # plot up to this many epochs
+
+    BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
+    OUTPUT_DIR   = os.path.join(
+        "/rds/general/user/ak2721/home/results/SNN_FYP/plots", DATASET
+    )
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    set_style()
+
+    print(f"\n{'='*60}")
+    print(f"  Buffer curve plots  --  dataset : {DATASET.upper()}")
+    print(f"  Results root        : {BASE_RESULTS}")
+    print(f"  Output dir          : {OUTPUT_DIR}")
+    print(f"  Epochs plotted      : up to {N_EPOCHS}")
+    print(f"{'='*60}\n")
+
+    print("  Accuracy curves ...")
+    plot_accuracy_curves(
+        BASELINE, BUFFER_MODELS, N_EPOCHS, DATASET,
+        os.path.join(OUTPUT_DIR, "buffer_accuracy_curves.png"),
+    )
+
+    print("\n  Loss curves ...")
+    plot_loss_curves(
+        BASELINE, BUFFER_MODELS, N_EPOCHS, DATASET,
+        os.path.join(OUTPUT_DIR, "buffer_loss_curves.png"),
+    )
+
+    print(f"\n{'='*60}")
+    print(f"  Done. Outputs: {OUTPUT_DIR}")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    main()
