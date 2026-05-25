@@ -133,7 +133,7 @@ def plot_accuracy_curves(baseline_entry, buffer_entries,
                          n_epochs, dataset, output_path):
     """
     One panel. AAD V2 SNNTorch as dark grey dashed baseline.
-    Each buffer strategy in a distinct academic colour.
+    Each buffer strategy in a distinct academic colour
     Raw curve faint, smoothed curve bold.
     Legend outside right.
     """
@@ -296,7 +296,7 @@ def main():
 
     # ── CONFIGURATION ─────────────────────────────────────────────────
     DATASET      = "shd"
-    N_EPOCHS     = 500     # plot up to this many epochs
+    N_EPOCHS     = 100     # plot up to this many epochs
 
     BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
     OUTPUT_DIR   = os.path.join(
@@ -324,7 +324,6 @@ def main():
         BASELINE, BUFFER_MODELS, N_EPOCHS, DATASET,
         os.path.join(OUTPUT_DIR, "buffer_loss_curves.png"),
     )
-
     print(f"\n{'='*60}")
     print(f"  Done. Outputs: {OUTPUT_DIR}")
     print(f"{'='*60}\n")
