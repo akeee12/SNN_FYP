@@ -206,19 +206,19 @@ def plot_benchmark_scatter(models: list,
                 # Annotation — use (best) instead of star to avoid glyph issues
         # Replace the single ax.annotate call with this:
         offsets = {
-            "AAD SNNTorch":            ( 8,   4),
-            "CaDLIF":                  ( 8,  -12),
-            "DCLS":                    (-85,   4),   # push left — away from right edge
-            "DHLIF":                   ( 8,   4),
-            "Event SSM":               ( 8,  -12),
-            "Exponential buffer":      ( 8,   4),
-            "Linear buffer":           ( 8,  -12),
-            "Log buffer":              ( 8,   4),
-            "Power-law buffer (y=2)":  (-105,  4),   # push left if near right edge too
-            "Random buffer":           ( 8,   4),
+            "AAD SNNTorch":            (  8,   4),
+            "CaDLIF":                  (  8,  -14),  # push below to avoid DHLIF
+            "DCLS":                    ( -55,  -14), # left and below the dot
+            "DHLIF":                   (  8,   4),
+            "Event SSM":               (  8,   4),
+            "Exponential buffer":      (  8,  -12),
+            "Linear buffer":           (  8,   4),
+            "Log buffer":              (  8,  -12),  # below to avoid Power-law
+            "Power-law buffer (y=2)":  (  8,   4),   # right — it's top left so room exists
+            "Random buffer":           (  8,   4),
         }
         dx, dy = offsets.get(m["label"], (8, 4))
-        ann_label = f"{m['label']} (best)" if is_best_buf else m["label"]
+        ann_label = f"{m['label']}*" if is_best_buf else m["label"]
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
@@ -228,7 +228,8 @@ def plot_benchmark_scatter(models: list,
             color      = m["color"],
             fontweight = "bold" if is_benchmark else "normal",
             clip_on    = True,   # ← change False to True to clip at axes boundary
-)
+        )
+
 
         # Legend proxy
         proxy = Line2D(
@@ -287,6 +288,9 @@ def plot_benchmark_scatter(models: list,
         borderpad      = 0.7,
         labelspacing   = 0.5,
     )
+    fig.text(0.13, 0.01, "* Best performing buffer strategy.",
+            fontsize=7.5, color="#555555", fontstyle="italic",
+            fontfamily="serif")
     for text in leg.get_texts():
         if text.get_text() in ("Benchmark models", "Buffer strategies"):
             text.set_style("italic")
