@@ -203,18 +203,32 @@ def plot_benchmark_scatter(models: list,
 
         ax.scatter(m["n_params"], m["best_acc"], **scatter_kw)
 
-        # Annotation — use (best) instead of star to avoid glyph issues
+                # Annotation — use (best) instead of star to avoid glyph issues
+        # Replace the single ax.annotate call with this:
+        offsets = {
+            "AAD SNNTorch":            ( 8,   4),
+            "CaDLIF":                  ( 8,  -12),
+            "DCLS":                    (-85,   4),   # push left — away from right edge
+            "DHLIF":                   ( 8,   4),
+            "Event SSM":               ( 8,  -12),
+            "Exponential buffer":      ( 8,   4),
+            "Linear buffer":           ( 8,  -12),
+            "Log buffer":              ( 8,   4),
+            "Power-law buffer (y=2)":  (-105,  4),   # push left if near right edge too
+            "Random buffer":           ( 8,   4),
+        }
+        dx, dy = offsets.get(m["label"], (8, 4))
         ann_label = f"{m['label']} (best)" if is_best_buf else m["label"]
         ax.annotate(
             ann_label,
             xy         = (m["n_params"], m["best_acc"]),
-            xytext     = (8, 4),
+            xytext     = (dx, dy),
             textcoords = "offset points",
             fontsize   = 7.5,
             color      = m["color"],
             fontweight = "bold" if is_benchmark else "normal",
-            clip_on    = False,
-        )
+            clip_on    = True,   # ← change False to True to clip at axes boundary
+)
 
         # Legend proxy
         proxy = Line2D(
