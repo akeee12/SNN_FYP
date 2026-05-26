@@ -296,7 +296,7 @@ def main():
 
     # ── CONFIGURATION ─────────────────────────────────────────────────
     DATASET      = "shd"
-    N_EPOCHS     = 100   # plot up to this many epochs
+    N_EPOCHS     = 100     # plot up to this many epochs
 
     BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
     OUTPUT_DIR   = os.path.join(
