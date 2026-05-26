@@ -37,6 +37,7 @@ import json
 import argparse
 import numpy as np
 import torch
+import torch.nn as nn
 import h5py
 from torch.utils.data import Dataset, DataLoader
 
@@ -46,8 +47,40 @@ sys.path.insert(0, os.path.join(ROOT, "models"))
 
 from configs import get_config
 from utils.seed import set_seed
-from CODE.SNN_FYP.experiments.plot_buffer_comparison import ResultsLogger
 from power_law_tap_aad_snntorch import PowerLawTapAADNetSNNTorch
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESULTS LOGGER
+# Logs per-epoch metrics to CSV for later plotting.
+# Replaces the broken CODE.SNN_FYP.experiments import.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ResultsLogger:
+    """
+    Writes one CSV row per epoch to results_dir/training_log.csv.
+
+    Columns:
+        model, epoch, loss, train_acc, test_acc, peak_mem_mb, epoch_time_s
+    """
+
+    def __init__(self, results_dir: str):
+        os.makedirs(results_dir, exist_ok=True)
+        self.path = os.path.join(results_dir, "training_log.csv")
+        with open(self.path, "w") as f:
+            f.write("model,epoch,loss,train_acc,"
+                    "test_acc,peak_mem_mb,epoch_time_s\n")
+
+    def log_epoch(self, model_name: str, epoch: int,
+                  loss: float, train_acc: float, test_acc: float,
+                  peak_mem: float, epoch_time: float):
+        with open(self.path, "a") as f:
+            f.write(f"{model_name},{epoch},{loss:.6f},"
+                    f"{train_acc:.6f},{test_acc:.6f},"
+                    f"{peak_mem:.2f},{epoch_time:.2f}\n")
+
+    def save(self):
+        pass   # rows written line-by-line — nothing extra needed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +261,46 @@ def reset_gpu_stats():
 def get_param_mb(model):
     return sum(p.numel() * p.element_size()
                for p in model.parameters()) / (1024 ** 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NaN UTILITIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def zero_nan_grads(model: nn.Module):
+    """Zero any NaN/Inf gradients before optimizer step."""
+    for param in model.parameters():
+        if param.grad is not None:
+            if (torch.isnan(param.grad).any() or
+                    torch.isinf(param.grad).any()):
+                param.grad = torch.nan_to_num(
+                    param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def reset_nan_params(model: nn.Module):
+    """Reset any NaN/Inf parameters after optimizer step."""
+    with torch.no_grad():
+        for param in model.parameters():
+            if (torch.isnan(param.data).any() or
+                    torch.isinf(param.data).any()):
+                param.data = torch.nan_to_num(
+                    param.data, nan=0.0, posinf=1.0, neginf=0.0)
+
+
+def safe_delay_stats(model) -> tuple:
+    """Guard delay stats against NaN from torch.quantile."""
+    try:
+        stats  = model.get_delay_stats()
+        d1_p95 = stats['delay1']['p95']
+        d2_p95 = stats['delay2']['p95']
+        if not torch.isfinite(torch.tensor(float(d1_p95))):
+            d1_p95 = 0.0
+        if not torch.isfinite(torch.tensor(float(d2_p95))):
+            d2_p95 = 0.0
+    except Exception:
+        d1_p95 = 0.0
+        d2_p95 = 0.0
+    return d1_p95, d2_p95
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -422,10 +495,11 @@ def train(cfg, results_dir, network_size, resume_path=None):
             output = model(spikes)
             loss   = model.compute_loss(output, labels)
             loss.backward()
+            zero_nan_grads(model)
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=5.0
-            )
+                model.parameters(), max_norm=5.0)
             optimizer.step()
+            reset_nan_params(model)
             pred        = model.predict(output)
             correct    += (pred == labels).sum().item()
             total      += labels.size(0)
@@ -454,7 +528,7 @@ def train(cfg, results_dir, network_size, resume_path=None):
         avg_loss     = epoch_loss / len(train_loader)
         thea1, thea2 = delay_sched.get_caps()
         current_lr   = optimizer.param_groups[0]["lr"]
-        stats        = model.get_delay_stats()
+        d1_p95, d2_p95 = safe_delay_stats(model)
 
         train_losses.append(avg_loss)
         train_accs.append(train_acc)
@@ -487,8 +561,8 @@ def train(cfg, results_dir, network_size, resume_path=None):
             f"Mem: {peak_mem:.1f}MB | "
             f"t: {epoch_time:.1f}s | "
             f"Caps: [{thea1:.0f},{thea2:.0f}] | "
-            f"d1_p95: {stats['delay1']['p95']:.2f} | "
-            f"d2_p95: {stats['delay2']['p95']:.2f}"
+            f"d1_p95: {d1_p95:.2f} | "
+            f"d2_p95: {d2_p95:.2f}"
         )
 
         logger.log_epoch(
@@ -580,8 +654,7 @@ def main():
     parser.add_argument("--buffer-size",    type=int,   default=None,
                         help="k — bottleneck width (default from config)")
     parser.add_argument("--buffer-max-lag", type=int,   default=None,
-                        help="Override buffer_max_lag after tap generation. "
-                             "Use to fix max_lag independently of --num-taps.")
+                        help="Override buffer_max_lag after tap generation.")
     parser.add_argument("--num-taps",       type=int,   default=None,
                         help="n — number of taps (2..9).")
     parser.add_argument("--network-size",   type=str,   default="medium",
@@ -615,12 +688,10 @@ def main():
         print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} → "
               f"taps={cfg.taps}  max_lag={cfg.buffer_max_lag}")
 
-    # buffer_max_lag override — MUST come after --num-taps block
-    # so it can override the auto-computed value
-    # taps are already set correctly — only the ring buffer depth changes
+    # buffer_max_lag override — after --num-taps block
     if args.buffer_max_lag is not None:
         cfg.buffer_max_lag = args.buffer_max_lag
-        print(f"  [max_lag override] buffer_max_lag set to {cfg.buffer_max_lag}")
+        print(f"  [max_lag override] buffer_max_lag={cfg.buffer_max_lag}")
 
     # ── Resolve output directory ──────────────────────────────────────
     run_name = make_run_name(cfg, args.network_size)
