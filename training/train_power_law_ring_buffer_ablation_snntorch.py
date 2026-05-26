@@ -6,8 +6,7 @@ Ablation-ready: supports --num-taps (n=2..9), --network-size
 
 Tap rule:
     t_i = round( max_lag * (i / (n-1))^gamma )
-    buffer_max_lag is set automatically from --num-taps:
-        same rule as log ablation: max_lag = 2^(n-1)
+    buffer_max_lag passed explicitly via --buffer-max-lag.
     Endpoints always pinned to 1 and max_lag.
 
 Naming convention:
@@ -21,7 +20,8 @@ Usage (ablation, called from PBS array job):
         --base-dir      /path/to/results/ablation_power_law/v1        \
         --num-taps      7                                              \
         --network-size  medium                                         \
-        --gamma         2.0
+        --gamma         2.0                                            \
+        --buffer-max-lag 64
 
 Usage (production, defaults):
     python3 training/train_power_law_ring_buffer_ablation_snntorch.py \
@@ -52,18 +52,13 @@ from power_law_tap_aad_snntorch import PowerLawTapAADNetSNNTorch
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RESULTS LOGGER
-# Logs per-epoch metrics to CSV for later plotting.
-# Replaces the broken CODE.SNN_FYP.experiments import.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ResultsLogger:
     """
     Writes one CSV row per epoch to results_dir/training_log.csv.
-
-    Columns:
-        model, epoch, loss, train_acc, test_acc, peak_mem_mb, epoch_time_s
+    Columns: model, epoch, loss, train_acc, test_acc, peak_mem_mb, epoch_time_s
     """
-
     def __init__(self, results_dir: str):
         os.makedirs(results_dir, exist_ok=True)
         self.path = os.path.join(results_dir, "training_log.csv")
@@ -80,7 +75,7 @@ class ResultsLogger:
                     f"{peak_mem:.2f},{epoch_time:.2f}\n")
 
     def save(self):
-        pass   # rows written line-by-line — nothing extra needed
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,7 +102,7 @@ def make_power_law_taps(n: int, max_lag: int, gamma: float) -> list:
     Endpoints pinned: t_0=1, t_{n-1}=max_lag.
 
     n=7, max_lag=64, gamma=2.0 → [1, 2, 7, 16, 28, 44, 64]
-    n=7, max_lag=64, gamma=2.5 → [1, 2, 4, 11, 22, 40, 64]
+    n=5, max_lag=64, gamma=2.0 → [1, 4, 16, 36, 64]
     """
     if n < 2:
         raise ValueError(f"n must be >= 2, got {n}")
@@ -131,23 +126,11 @@ def make_power_law_taps(n: int, max_lag: int, gamma: float) -> list:
     return taps
 
 
-def max_lag_for_n(n: int) -> int:
-    """
-    Same max_lag rule as log ablation: max_lag = 2^(n-1).
-    Ensures fair comparison — same buffer depth for same n.
-    """
-    return 2 ** (n - 1)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # RUN NAMING
 # ─────────────────────────────────────────────────────────────────────────────
 
 def make_run_name(cfg, network_size: str) -> str:
-    """
-    k{buffer_size}_n{n_taps}_lag{max_lag}_g{gamma}_{network_size}
-    e.g. k32_n7_lag64_g2.0_medium
-    """
     n = len(cfg.taps)
     return (f"k{cfg.buffer_size}_n{n}"
             f"_lag{cfg.buffer_max_lag}"
@@ -268,7 +251,6 @@ def get_param_mb(model):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def zero_nan_grads(model: nn.Module):
-    """Zero any NaN/Inf gradients before optimizer step."""
     for param in model.parameters():
         if param.grad is not None:
             if (torch.isnan(param.grad).any() or
@@ -278,7 +260,6 @@ def zero_nan_grads(model: nn.Module):
 
 
 def reset_nan_params(model: nn.Module):
-    """Reset any NaN/Inf parameters after optimizer step."""
     with torch.no_grad():
         for param in model.parameters():
             if (torch.isnan(param.data).any() or
@@ -288,7 +269,6 @@ def reset_nan_params(model: nn.Module):
 
 
 def safe_delay_stats(model) -> tuple:
-    """Guard delay stats against NaN from torch.quantile."""
     try:
         stats  = model.get_delay_stats()
         d1_p95 = stats['delay1']['p95']
@@ -321,32 +301,24 @@ class DelayScheduler:
         if epoch <= self.adapt_start:
             model.clamp_delays(self.thea1, self.thea2)
             return
-
         self.update1 += 1
         self.update2 += 1
-
         d1 = torch.nan_to_num(
             model.delay1.delay.detach().cpu(), nan=0.0)
         d2 = torch.nan_to_num(
             model.delay2.delay.detach().cpu(), nan=0.0)
-
         sorted1 = torch.sort(torch.floor(d1))[0]
         sorted2 = torch.sort(torch.floor(d2))[0]
-
-        # Dynamic p84 index — correct for small/medium/large n_hidden
         p84_idx1 = max(0, int(0.84 * len(sorted1)) - 1)
         p84_idx2 = max(0, int(0.84 * len(sorted2)) - 1)
-
         if self.update1 >= self.adapt_window:
             if sorted1[p84_idx1] > (self.thea1 - self.expand_margin):
                 self.thea1 += 1.0
             self.update1 = 0
-
         if self.update2 >= self.adapt_window:
             if sorted2[p84_idx2] > (self.thea2 - self.expand_margin):
                 self.thea2 += 1.0
             self.update2 = 0
-
         model.clamp_delays(self.thea1, self.thea2)
 
     def get_caps(self):
@@ -651,10 +623,10 @@ def main():
     parser.add_argument("--datasets-path",  type=str,   default=None)
     parser.add_argument("--base-dir",       type=str,   default=None)
     parser.add_argument("--resume",         type=str,   default=None)
-    parser.add_argument("--buffer-size",    type=int,   default=None,
-                        help="k — bottleneck width (default from config)")
+    parser.add_argument("--buffer-size",    type=int,   default=None)
     parser.add_argument("--buffer-max-lag", type=int,   default=None,
-                        help="Override buffer_max_lag after tap generation.")
+                        help="max_lag for the ring buffer and tap generation. "
+                             "MUST be passed explicitly from the PBS script.")
     parser.add_argument("--num-taps",       type=int,   default=None,
                         help="n — number of taps (2..9).")
     parser.add_argument("--network-size",   type=str,   default="medium",
@@ -666,34 +638,38 @@ def main():
 
     cfg = get_config("power_law_tap_snntorch")
 
-    # ── Apply overrides ───────────────────────────────────────────────
+    # ── Step 1: basic overrides ───────────────────────────────────────
     if args.epochs        is not None: cfg.epochs        = args.epochs
     if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
     if args.buffer_size   is not None: cfg.buffer_size   = args.buffer_size
     if args.theta_u       is not None: cfg.theta_u       = args.theta_u
 
-    # Network size → n_hidden
+    # ── Step 2: network size ──────────────────────────────────────────
     cfg.n_hidden = NETWORK_SIZES[args.network_size]
 
-    # Gamma — must be set before tap computation
+    # ── Step 3: gamma ─────────────────────────────────────────────────
     if args.gamma is not None:
         cfg.gamma = args.gamma
 
-    # Taps — computed from n and gamma
+    # ── Step 4: max_lag — MUST be set before tap computation ─────────
+    # The PBS script passes --buffer-max-lag explicitly so we always
+    # use that value. Never auto-compute from n here — that was the bug.
+    if args.buffer_max_lag is not None:
+        cfg.buffer_max_lag = args.buffer_max_lag
+        print(f"  [max_lag] buffer_max_lag={cfg.buffer_max_lag}")
+    else:
+        # fallback for production runs without --buffer-max-lag
+        print(f"  [max_lag] using config default: {cfg.buffer_max_lag}")
+
+    # ── Step 5: taps — computed AFTER max_lag is finalised ────────────
     if args.num_taps is not None:
-        cfg.buffer_max_lag = max_lag_for_n(args.num_taps)
         cfg.taps = make_power_law_taps(
             args.num_taps, cfg.buffer_max_lag, cfg.gamma
         )
-        print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} → "
-              f"taps={cfg.taps}  max_lag={cfg.buffer_max_lag}")
+        print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} "
+              f"max_lag={cfg.buffer_max_lag} → taps={cfg.taps}")
 
-    # buffer_max_lag override — after --num-taps block
-    if args.buffer_max_lag is not None:
-        cfg.buffer_max_lag = args.buffer_max_lag
-        print(f"  [max_lag override] buffer_max_lag={cfg.buffer_max_lag}")
-
-    # ── Resolve output directory ──────────────────────────────────────
+    # ── Step 6: resolve output directory ─────────────────────────────
     run_name = make_run_name(cfg, args.network_size)
 
     if args.base_dir is not None:
@@ -709,3 +685,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
