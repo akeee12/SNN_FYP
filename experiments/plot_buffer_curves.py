@@ -25,7 +25,7 @@ import matplotlib.ticker as mticker
 
 BASELINE = (
     "aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
-    "AAD V2 SNNTorch (baseline)",
+    "AAD (baseline)",
     "#333333",   # dark grey
     "-",
     "o",
@@ -187,7 +187,7 @@ def plot_accuracy_curves(baseline_entry, buffer_entries,
     ax.set_ylabel("Test Accuracy (%)")
     ax.set_title(
         f"Test Accuracy per Epoch — SHD\n"
-        f"Buffer strategies vs AAD V2 SNNTorch baseline",
+        f"Buffer strategies vs AAD baseline",
         pad=10,
     )
     ax.set_xlim(1, n_epochs)
@@ -265,7 +265,7 @@ def plot_loss_curves(baseline_entry, buffer_entries,
     ax.set_ylabel("Training Loss")
     ax.set_title(
         f"Training Loss per Epoch — SHD\n"
-        f"Buffer strategies vs AAD V2 SNNTorch baseline",
+        f"Buffer strategies vs AAD baseline",
         pad=10,
     )
     ax.set_xlim(1, n_epochs)
