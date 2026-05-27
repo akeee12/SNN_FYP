@@ -47,32 +47,43 @@ sys.path.insert(0, ROOT)
 
 MODEL_PATH_MAP = {
     "shd": [
-        # ── Benchmark models (circles) ────────────────────────────────
+        # ── Benchmark models ──────────────────────────────────────────
         ("aad_v2_snntorch_500e/v3/AdaptiveAxonalDelayNetV2SNNTorch_summary.json",
-         "AAD SNNTorch",          "o", "black", "benchmark"),
+         "AAD SNNTorch",           "o", "black", "benchmark"),
         ("cadlif/v2/cAdLIF_summary.json",
-         "CaDLIF",                "o", "black", "benchmark"),
+         "CaDLIF",                 "o", "black", "benchmark"),
         ("dcls/DCLS_summary.json",
-         "DCLS",                  "o", "black", "benchmark"),
+         "DCLS",                   "o", "black", "benchmark"),
         ("dhlif/v1/DHLIF_summary.json",
-         "DHLIF",                 "o", "black", "benchmark"),
+         "DHLIF",                  "o", "black", "benchmark"),
         ("event_ssm/v1/event_ssm_summary.json",
-         "Event SSM",             "o", "black", "benchmark"),
-        # ── Buffer strategies (crosses) ───────────────────────────────
+         "Event SSM",              "o", "black", "benchmark"),
+        # ── Buffer strategies ─────────────────────────────────────────
         ("exponential_tap/v1/ExponentialTapAADSNNTorch_summary.json",
-         "Exponential buffer",    "x", "black", "buffer"),
+         "Exponential buffer",     "x", "black", "buffer"),
         ("linear_tap/v1/LinearTapAADSNNTorch_summary.json",
-         "Linear buffer",         "x", "black", "buffer"),
+         "Linear buffer",          "x", "black", "buffer"),
         ("log_buffer_snntorch/v2/LogBufferAADSNNTorch_summary.json",
-         "Log buffer",            "x", "black", "buffer"),
+         "Log buffer",             "x", "black", "buffer"),
         ("power_law_tap/v1/PowerLawTapAADSNNTorch_summary.json",
-         "Power-law buffer (γ=2)","x", "black", "buffer"),
+         "Power-law buffer (g=2)", "x", "black", "buffer"),
         ("random_tap/v1/RandomTapAADSNNTorch_summary.json",
-         "Random buffer",         "x", "black", "buffer"),
+         "Random buffer",          "x", "black", "buffer"),
     ],
-    # ── Add ssc / dvs entries here when trained ───────────────────────
     "ssc": [],
-    "dvs": [],
+    "dvs": [
+        # ── Buffer strategies only — no DVS-trained benchmarks yet ────
+        ("exponential_tap_dvs/v2/ExponentialTapAADSNNTorch_summary.json",
+         "Exponential buffer",     "x", "black", "buffer"),
+        ("linear_tap_dvs/v1/LinearTapAADSNNTorch_summary.json",
+         "Linear buffer",          "x", "black", "buffer"),
+        ("log_ring_buffer_dvs/v1/LogRingBufferAADSNNTorch_summary.json",
+         "Log buffer",             "x", "black", "buffer"),
+        ("power_law_tap_dvs/v1/PowerLawTapAADSNNTorch_summary.json",
+         "Power-law buffer (g=2)", "x", "black", "buffer"),
+        ("random_tap_dvs/v1/RandomTapAADSNNTorch_summary.json",
+         "Random buffer",          "x", "black", "buffer"),
+    ],
 }
 
 
@@ -445,7 +456,7 @@ def print_summary(models: list, top_k: int):
 
 def main():
 
-    DATASET = "shd"
+    DATASET = "dvs"
     TOP_K   = 10
 
     BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
