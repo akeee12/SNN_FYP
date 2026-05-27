@@ -1,0 +1,172 @@
+#!/bin/bash
+#PBS -N exp_tap_snntorch_ssc
+#PBS -l walltime=10:30:00
+#PBS -l select=1:ncpus=8:mem=8gb:ngpus=1:gpu_type=RTX6000
+#PBS -j oe
+#PBS -o /rds/general/user/ak2721/home/logs/exp_tap_snntorch_ssc.log
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SSC
+RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP/exponential_tap_ssc
+LOGS=/rds/general/user/ak2721/home/logs
+
+mkdir -p "$RESULTS"
+mkdir -p "$LOGS"
+cd "$REPO"
+
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+python3 -m pip install --user --quiet snntorch numpy h5py matplotlib
+
+git pull origin main
+
+echo "============================================================"
+echo "  Job ID    : $PBS_JOBID"
+echo "  Node      : $(hostname)"
+echo "  Start     : $(date)"
+echo "  Dataset   : SSC"
+echo "  Repo      : $REPO"
+echo "  Results   : $RESULTS"
+echo "============================================================"
+
+nvidia-smi
+python3 -c "import torch; print('CUDA:', torch.cuda.is_available())"
+python3 -c "import torch; print('GPU count:', torch.cuda.device_count())"
+python3 -c "import torch; print('GPU :', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU_ONLY')"
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+python3 -c "import snntorch; print('snnTorch:', snntorch.__version__)"
+
+echo ""
+echo "Checking SSC data files..."
+if [ ! -f "$DATA/ssc_train.h5" ]; then
+    echo "ERROR: ssc_train.h5 not found at $DATA"
+    exit 1
+fi
+if [ ! -f "$DATA/ssc_test.h5" ]; then
+    echo "ERROR: ssc_test.h5 not found at $DATA"
+    exit 1
+fi
+echo "Data files OK"
+
+echo ""
+echo "Existing result versions in $RESULTS:"
+if [ -d "$RESULTS" ]; then
+    ls -d "$RESULTS"/v* 2>/dev/null || echo "  None yet — this will be v1"
+fi
+echo ""
+
+echo "Running probe check..."
+python3 -c "
+import sys, torch
+sys.path.insert(0, 'models')
+sys.path.insert(0, '.')
+from configs import get_config
+from exponential_tap_aad_snntorch import ExponentialTapAADNetSNNTorch
+
+cfg = get_config('exponential_tap_snntorch')
+cfg.n_inputs   = 700
+cfg.n_outputs  = 35
+cfg.time_steps = 400
+n_zero = sum(1 for t in cfg.taps if t == 0)
+print('  model_name     :', cfg.model_name)
+print('  dataset        : SSC')
+print('  n_inputs       :', cfg.n_inputs)
+print('  n_outputs      :', cfg.n_outputs)
+print('  time_steps     :', cfg.time_steps)
+print('  tap_strategy   : exponential  (ring buffer storage)')
+print('  taps           :', cfg.taps)
+print('  zero-padded    :', n_zero, 'taps exceed max_lag')
+print('  tau_s          :', cfg.tau_s)
+print('  tau_r          :', cfg.tau_r)
+print('  threshold      :', cfg.threshold)
+print('  delay_init_cap :', cfg.delay_init_cap)
+print('  lr             :', cfg.lr)
+print('  batch_size     :', cfg.batch_size)
+print('  buffer_size    :', cfg.buffer_size, '(k)')
+print('  buffer_max_lag :', cfg.buffer_max_lag)
+print('  ring depth     :', cfg.buffer_max_lag + 1, 'slots')
+print('  theta_u        :', cfg.theta_u)
+print('  target_true    :', cfg.target_true)
+print('  target_false   :', cfg.target_false)
+
+torch.manual_seed(42)
+model    = ExponentialTapAADNetSNNTorch(cfg)
+n_params = sum(p.numel() for p in model.parameters())
+print('  n_params       :', f'{n_params:,}')
+
+x = (torch.rand(2, cfg.time_steps, cfg.n_inputs) < 0.05).float()
+with torch.no_grad():
+    out = model(x)
+
+buf_info = model.get_buffer_info()
+print('  output shape   :', tuple(out.shape))
+print('  storage        :', buf_info['storage'])
+print('  buf k          :', buf_info['k'])
+print('  buf L          :', buf_info['L'])
+print('  buf taps       :', buf_info['taps'])
+print('  zero taps      :', buf_info['n_zero'])
+stats = model.get_delay_stats()
+print('  d1_p95         :', round(stats['delay1']['p95'], 3))
+print('  d2_p95         :', round(stats['delay2']['p95'], 3))
+print('  STATUS         : OK')
+"
+
+PROBE_EXIT=$?
+if [ $PROBE_EXIT -ne 0 ]; then
+    echo "ERROR: Probe check failed — aborting."
+    exit $PROBE_EXIT
+fi
+
+echo ""
+echo "Starting SSC training (500 epochs)..."
+echo "============================================================"
+
+python3 training/train_exponential_tap_snntorch.py \
+    --dataset       ssc          \
+    --epochs        100          \
+    --datasets-path "$DATA"      \
+    --base-dir      "$RESULTS"
+
+EXIT_CODE=$?
+
+echo ""
+echo "============================================================"
+echo "  End time  : $(date)"
+echo "  Exit code : $EXIT_CODE"
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "  Status    : SUCCESS"
+    LATEST_V=$(ls -d "$RESULTS"/v* 2>/dev/null | sort -V | tail -1)
+    if [ -n "$LATEST_V" ]; then
+        echo "  Results   : $LATEST_V"
+        python3 -c "
+import json, glob
+summaries = glob.glob('$LATEST_V/*_summary.json')
+if summaries:
+    with open(summaries[0]) as f:
+        s = json.load(f)
+    print('  Best acc     :', f\"{s['best_acc']*100:.2f}%\")
+    print('  Version      :', f\"v{s.get('version','?')}\")
+    print('  n_params     :', f\"{s['n_params']:,}\")
+    print('  tap_strategy :', s.get('tap_strategy', '?'))
+    print('  storage      :', s.get('storage', '?'))
+    print('  taps         :', s.get('buffer_taps', '?'))
+    print('  zero taps    :', s.get('n_zero_taps', '?'))
+    print('  final thea1  :', s.get('final_thea1', '?'))
+    print('  final thea2  :', s.get('final_thea2', '?'))
+    accs = s.get('test_accs', [])
+    if accs:
+        print('  Last 5 accs :', [f\"{a*100:.2f}%\" for a in accs[-5:]])
+else:
+    print('  No summary file found in $LATEST_V')
+"
+    fi
+else
+    echo "  Status    : FAILED (exit code $EXIT_CODE)"
+fi
+
+echo "============================================================"
+echo ""
+echo "ExponentialTapAADSNNTorch SSC training complete: $(date)"

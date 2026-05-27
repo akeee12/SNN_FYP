@@ -1,0 +1,33 @@
+#!/bin/bash
+#PBS -N three_factor_train
+#PBS -q v1_gpu72
+#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=8:mem=32gb:ngpus=1:gpu_type=L40S
+#PBS -j oe
+#PBS -o /rds/general/user/ak2721/home/logs/three_factor_train.log
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SHD
+RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP/three_factor_delay
+
+mkdir -p "$RESULTS"
+mkdir -p /rds/general/user/ak2721/home/logs
+cd "$REPO"
+
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+python3 -m pip install --user --quiet numpy h5py matplotlib
+
+git pull origin main
+
+nvidia-smi
+python3 -c "import torch; print('CUDA:', torch.cuda.is_available())"
+
+python3 training/train_three_factor.py \
+    --epochs 1000 \
+    --datasets-path "$DATA" \
+    --results-dir   "$RESULTS"
+
+echo "Three-Factor Delay training complete: $(date)"

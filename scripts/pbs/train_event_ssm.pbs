@@ -1,0 +1,120 @@
+#!/bin/bash
+#PBS -N event_ssm_shd
+#PBS -l walltime=10:00:00
+#PBS -l select=1:ncpus=8:mem=8gb:ngpus=1
+#PBS -j oe
+#PBS -o /rds/general/user/ak2721/home/logs/event_ssm_shd.log
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SHD
+RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP/event_ssm
+LOGS=/rds/general/user/ak2721/home/logs
+
+mkdir -p "$RESULTS"
+mkdir -p "$LOGS"
+cd "$REPO"
+
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+python3 -m pip install --user --quiet numpy h5py matplotlib
+
+git pull origin main
+
+echo "============================================================"
+echo "  Job ID    : $PBS_JOBID"
+echo "  Node      : $(hostname)"
+echo "  Start     : $(date)"
+echo "  Repo      : $REPO"
+echo "  Results   : $RESULTS"
+echo "============================================================"
+
+nvidia-smi
+python3 -c "import torch; print('CUDA    :', torch.cuda.is_available())"
+python3 -c "import torch; print('GPU     :', torch.cuda.get_device_name(0))"
+python3 -c "import torch; print('PyTorch :', torch.__version__)"
+
+echo ""
+echo "Checking SHD data files..."
+if [ ! -f "$DATA/shd_train.h5" ]; then echo "ERROR: shd_train.h5 not found"; exit 1; fi
+if [ ! -f "$DATA/shd_test.h5"  ]; then echo "ERROR: shd_test.h5 not found";  exit 1; fi
+echo "Data files OK"
+
+echo ""
+echo "Existing versions:"
+ls -d "$RESULTS"/v* 2>/dev/null || echo "  None yet — this will be v1"
+
+echo ""
+echo "Running probe check..."
+python3 -c "
+import sys, torch, torch.nn as nn
+sys.path.insert(0, 'models')
+sys.path.insert(0, '.')
+from configs import get_config
+from event_ssm_model import EventSSMNet
+
+cfg = get_config('event_ssm')
+print('  d_model  :', cfg.d_model)
+print('  d_state  :', cfg.d_state)
+print('  n_layers :', cfg.n_layers)
+print('  T        :', cfg.time_steps)
+
+torch.manual_seed(42)
+model    = EventSSMNet(cfg)
+n_params = sum(p.numel() for p in model.parameters())
+print('  n_params :', f'{n_params:,}')
+
+x      = (torch.rand(2, cfg.time_steps, cfg.n_inputs) < 0.05).float()
+labels = torch.randint(0, cfg.n_outputs, (2,))
+logits = model(x)
+loss   = nn.CrossEntropyLoss()(logits, labels)
+print('  out shape:', logits.shape)
+print('  loss     :', round(loss.item(), 5))
+assert not torch.isnan(loss), 'FAIL: NaN loss'
+print('  STATUS   : OK')
+"
+
+echo ""
+echo "Starting training (500 epochs)..."
+echo "============================================================"
+
+python3 training/train_event_ssm.py \
+    --epochs        500              \
+    --datasets-path "$DATA"          \
+    --base-dir      "$RESULTS"
+
+EXIT_CODE=$?
+
+echo ""
+echo "============================================================"
+echo "  End time  : $(date)"
+echo "  Exit code : $EXIT_CODE"
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "  Status    : SUCCESS"
+    LATEST_V=$(ls -d "$RESULTS"/v* 2>/dev/null | sort -V | tail -1)
+    if [ -n "$LATEST_V" ]; then
+        echo "  Results   : $LATEST_V"
+        python3 -c "
+import json, glob
+summaries = glob.glob('$LATEST_V/*_summary.json')
+if summaries:
+    with open(summaries[0]) as f:
+        s = json.load(f)
+    print('  Best acc     :', f\"{s['best_acc']*100:.2f}%\")
+    print('  Version      :', f\"v{s.get('version','?')}\")
+    print('  n_params     :', f\"{s['n_params']:,}\")
+    bd = s.get('param_breakdown', {})
+    print('  SSM params   :', f\"{bd.get('ssm_params',0):,}\")
+    accs = s.get('test_accs', [])
+    if accs:
+        print('  Last 5 accs :', [f\"{a*100:.2f}%\" for a in accs[-5:]])
+"
+    fi
+else
+    echo "  Status    : FAILED (exit code $EXIT_CODE)"
+fi
+
+echo "============================================================"
+echo "EventSSM training complete: $(date)"

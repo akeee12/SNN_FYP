@@ -1,0 +1,311 @@
+#!/bin/bash
+#PBS -N log_ring_ablation
+#PBS -l walltime=10:00:00
+#PBS -l select=1:ncpus=8:mem=8gb:ngpus=1
+#PBS -j oe
+#PBS -J 1-24
+#PBS -o /rds/general/user/ak2721/home/logs/ablation_log_ring_^array_index^.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Log Ring Buffer Ablation — PBS Array Job
+#
+# 24 jobs: L=2..9 (8 tap configs) × 3 network sizes (small/medium/large)
+# Tap rule : taps = [1, 2, 4, ..., 2^(L-1)]
+# max_lag  : set automatically to 2^(L-1)
+#
+# Training script: training/train_log_ring_buffer_ablation_snntorch.py
+#
+# Submit:
+#   qsub scripts/pbs/ring/ablation_log_ring_buffer_snntorch.pbs
+#
+# Rerun single job (e.g. index 7):
+#   qsub -J 7-7 scripts/pbs/ring/ablation_log_ring_buffer_snntorch.pbs
+# ─────────────────────────────────────────────────────────────────────────────
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SHD
+ABLATION_ROOT=/rds/general/user/ak2721/home/results/SNN_FYP/ablation
+LOGS=/rds/general/user/ak2721/home/logs
+
+mkdir -p "$LOGS"
+cd "$REPO"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB ARRAY — 8 L values × 3 sizes = 24 jobs, 1-based
+# ─────────────────────────────────────────────────────────────────────────────
+
+RUNS=(
+    ""              # padding — PBS array is 1-based
+    "2  small"      #  1
+    "2  medium"     #  2
+    "2  large"      #  3
+    "3  small"      #  4
+    "3  medium"     #  5
+    "3  large"      #  6
+    "4  small"      #  7
+    "4  medium"     #  8
+    "4  large"      #  9
+    "5  small"      # 10
+    "5  medium"     # 11
+    "5  large"      # 12
+    "6  small"      # 13
+    "6  medium"     # 14
+    "6  large"      # 15
+    "7  small"      # 16
+    "7  medium"     # 17
+    "7  large"      # 18
+    "8  small"      # 19
+    "8  medium"     # 20
+    "8  large"      # 21
+    "9  small"      # 22
+    "9  medium"     # 23
+    "9  large"      # 24
+)
+
+IDX=$PBS_ARRAY_INDEX
+RUN="${RUNS[$IDX]}"
+NUM_TAPS=$(echo "$RUN" | awk '{print $1}')
+NET_SIZE=$(echo "$RUN" | awk '{print $2}')
+MAX_LAG=$((2 ** (NUM_TAPS - 1)))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+python3 -m pip install --user --quiet snntorch numpy h5py
+
+git pull origin main
+
+echo "============================================================"
+echo "  Ablation job  : $PBS_JOBID  (array index $IDX / 24)"
+echo "  Run config    : L=$NUM_TAPS  size=$NET_SIZE  max_lag=$MAX_LAG"
+echo "  Node          : $(hostname)"
+echo "  Start         : $(date)"
+echo "  Repo          : $REPO"
+echo "  Training file : training/train_log_ring_buffer_ablation_snntorch.py"
+echo "============================================================"
+
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+python3 -c "import torch; print('CUDA:', torch.cuda.is_available(), '| GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+python3 -c "import snntorch; print('snnTorch:', snntorch.__version__)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "Checking SHD data files..."
+if [ ! -f "$DATA/shd_train.h5" ]; then
+    echo "ERROR: shd_train.h5 not found at $DATA"
+    exit 1
+fi
+if [ ! -f "$DATA/shd_test.h5" ]; then
+    echo "ERROR: shd_test.h5 not found at $DATA"
+    exit 1
+fi
+echo "Data files OK"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSIONING
+# Job 1 creates the version dir — all others wait and reuse it
+# ─────────────────────────────────────────────────────────────────────────────
+
+mkdir -p "$ABLATION_ROOT"
+
+get_ablation_version_dir() {
+    local root="$1"
+    local best=-1
+    local best_dir=""
+    if [ -d "$root" ]; then
+        for d in "$root"/v*/; do
+            if [ -f "${d}ablation_config.json" ]; then
+                vnum="${d%/}"
+                vnum="${vnum##*/v}"
+                if [ "$vnum" -gt "$best" ] 2>/dev/null; then
+                    best=$vnum
+                    best_dir="${d%/}"
+                fi
+            fi
+        done
+    fi
+    echo "$best_dir"
+}
+
+if [ "$IDX" -eq 1 ]; then
+    echo ""
+    echo "Job 1: initialising ablation version directory..."
+    python3 - <<PYEOF
+import os, json, time
+
+root = "$ABLATION_ROOT"
+existing = []
+if os.path.isdir(root):
+    for entry in os.scandir(root):
+        if entry.is_dir() and entry.name.startswith("v"):
+            try:
+                existing.append(int(entry.name[1:]))
+            except ValueError:
+                pass
+version     = max(existing) + 1 if existing else 1
+version_dir = os.path.join(root, f"v{version}")
+os.makedirs(version_dir, exist_ok=True)
+
+ablation_cfg = {
+    "version"       : version,
+    "created_at"    : time.strftime("%Y-%m-%d %H:%M:%S"),
+    "strategy"      : "log_ring_buffer",
+    "training_file" : "train_log_ring_buffer_ablation_snntorch.py",
+    "k"             : 32,
+    "epochs"        : 100,
+    "network_sizes" : ["small", "medium", "large"],
+    "n_hidden_map"  : {"small": 64, "medium": 128, "large": 256},
+    "L_values"      : list(range(2, 10)),
+    "tap_rule"      : "taps = [2^i for i in range(L)]",
+    "max_lag_rule"  : "max_lag = 2^(L-1)",
+    "n_jobs"        : 24,
+}
+config_path = os.path.join(version_dir, "ablation_config.json")
+with open(config_path, "w") as f:
+    json.dump(ablation_cfg, f, indent=2)
+
+print(f"Ablation v{version} initialised → {version_dir}")
+PYEOF
+    echo "Version directory ready."
+else
+    echo ""
+    echo "Job $IDX: waiting for version directory from job 1..."
+    WAIT=0
+    while [ $WAIT -lt 60 ]; do
+        VERSION_DIR=$(get_ablation_version_dir "$ABLATION_ROOT")
+        if [ -n "$VERSION_DIR" ]; then
+            echo "  Found: $VERSION_DIR"
+            break
+        fi
+        sleep 3
+        WAIT=$((WAIT + 3))
+    done
+    if [ -z "$VERSION_DIR" ]; then
+        echo "ERROR: version directory not found after 60s"
+        exit 1
+    fi
+fi
+
+VERSION_DIR=$(get_ablation_version_dir "$ABLATION_ROOT")
+echo ""
+echo "  Ablation dir  : $VERSION_DIR"
+echo "  Run           : k32_L${NUM_TAPS}_lag${MAX_LAG}_${NET_SIZE}"
+echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROBE CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+
+echo "Running probe check for L=$NUM_TAPS, size=$NET_SIZE..."
+python3 - <<PYEOF
+import sys, torch
+sys.path.insert(0, ".")
+sys.path.insert(0, "models")
+from configs import get_config
+from log_ring_buffer_aad_snntorch import LogRingBufferAADNetSNNTorch
+
+NETWORK_SIZES = {"small": 64, "medium": 128, "large": 256}
+
+cfg                = get_config("log_ring_buffer_snntorch")
+cfg.n_hidden       = NETWORK_SIZES["$NET_SIZE"]
+cfg.taps           = [2**i for i in range($NUM_TAPS)]
+cfg.buffer_max_lag = 2 ** ($NUM_TAPS - 1)
+
+torch.manual_seed(42)
+model    = LogRingBufferAADNetSNNTorch(cfg)
+n_params = sum(p.numel() for p in model.parameters())
+x        = (torch.rand(2, cfg.time_steps, cfg.n_inputs) < 0.05).float()
+with torch.no_grad():
+    out = model(x)
+assert out.shape == (cfg.time_steps, 2, cfg.n_outputs), \
+    f"Bad shape: {out.shape}"
+buf_info = model.get_buffer_info()
+assert buf_info["storage"] == "ring", "Not ring buffer"
+assert buf_info["taps"]    == cfg.taps, "Taps mismatch"
+print(f"  n_hidden   : {cfg.n_hidden}")
+print(f"  L          : {len(cfg.taps)}")
+print(f"  taps       : {cfg.taps}")
+print(f"  max_lag    : {cfg.buffer_max_lag}")
+print(f"  ring depth : {cfg.buffer_max_lag + 1}")
+print(f"  n_params   : {n_params:,}")
+print(f"  out shape  : {tuple(out.shape)}")
+print(f"  STATUS     : OK")
+PYEOF
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: probe check failed for L=$NUM_TAPS size=$NET_SIZE"
+    exit 1
+fi
+echo "Probe check passed."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRAINING
+# ─────────────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "Starting training: L=$NUM_TAPS, size=$NET_SIZE, 100 epochs..."
+echo "============================================================"
+
+python3 training/train_log_ring_buffer_ablation_snntorch.py \
+    --epochs        100             \
+    --datasets-path "$DATA"         \
+    --base-dir      "$VERSION_DIR"  \
+    --num-taps      "$NUM_TAPS"     \
+    --network-size  "$NET_SIZE"
+
+EXIT_CODE=$?
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY
+# ─────────────────────────────────────────────────────────────────────────────
+
+RUN_NAME="k32_L${NUM_TAPS}_lag${MAX_LAG}_${NET_SIZE}"
+
+echo ""
+echo "============================================================"
+echo "  End time      : $(date)"
+echo "  Exit code     : $EXIT_CODE"
+echo "  Run           : $RUN_NAME"
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "  Status        : SUCCESS"
+    RUN_DIR="${VERSION_DIR}/${RUN_NAME}"
+    python3 - <<PYEOF
+import json, glob, os
+run_dir   = "$RUN_DIR"
+summaries = glob.glob(os.path.join(run_dir, "*_summary.json"))
+if summaries:
+    with open(summaries[0]) as f:
+        s = json.load(f)
+    print(f"  Best acc      : {s['best_acc']*100:.2f}%")
+    print(f"  n_params      : {s['n_params']:,}")
+    print(f"  n_hidden      : {s['n_hidden']}")
+    print(f"  L             : {s['L']}")
+    print(f"  taps          : {s['taps']}")
+    print(f"  max_lag       : {s['buffer_max_lag']}")
+    print(f"  final thea1   : {s.get('final_thea1','?')}")
+    print(f"  final thea2   : {s.get('final_thea2','?')}")
+    accs = s.get("test_accs", [])
+    if accs:
+        print(f"  Last 5 accs   : {[f'{a*100:.2f}%' for a in accs[-5:]]}")
+    total_mins = s.get("total_train_time_seconds", 0) / 60
+    print(f"  Total time    : {total_mins:.1f} min")
+else:
+    print(f"  WARNING: no summary found in {run_dir}")
+PYEOF
+else
+    echo "  Status        : FAILED (exit code $EXIT_CODE)"
+fi
+
+echo "============================================================"
+echo ""
+echo "Job $IDX complete (L=$NUM_TAPS, $NET_SIZE): $(date)"

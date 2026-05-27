@@ -1,0 +1,116 @@
+
+#!/bin/bash
+#PBS -N snn_benchmark
+#PBS -q v1_gpu72
+#PBS -l walltime=48:00:00
+#PBS -l select=1:ncpus=16:mem=64gb:ngpus=1:gpu_type=L40S
+#PBS -j oe
+#PBS -o /rds/general/user/ak2721/home/logs/snn_benchmark.log
+
+echo "================================================"
+echo "  Job ID  : $PBS_JOBID"
+echo "  Node    : $(hostname)"
+echo "  Start   : $(date)"
+echo "================================================"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SHD
+RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP
+LOGS=/rds/general/user/ak2721/home/logs
+
+mkdir -p "$RESULTS"
+mkdir -p "$LOGS"
+
+cd "$REPO" || { echo "ERROR: Cannot cd to $REPO"; exit 1; }
+
+# ── Load modules ──────────────────────────────────────────────────────────────
+module purge
+module load tools/prod                              # ← prerequisite
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1   # ← PyTorch + CUDA
+
+echo "Loaded modules:"
+module list
+
+# ── Verify Python and PyTorch ─────────────────────────────────────────────────
+which python3
+python3 --version
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+
+# ── Verify GPU ────────────────────────────────────────────────────────────────
+nvidia-smi
+
+python3 -c "
+import torch
+print('CUDA available:', torch.cuda.is_available())
+if torch.cuda.is_available():
+    print('GPU:', torch.cuda.get_device_name(0))
+    print('CUDA version:', torch.version.cuda)
+"
+
+# ── Install deps ──────────────────────────────────────────────────────────────
+python3 -m pip install --user --quiet numpy h5py matplotlib spikingjelly DCLS
+
+# ── Verify imports ────────────────────────────────────────────────────────────
+python3 - << 'PY'
+import torch, numpy, h5py, matplotlib, spikingjelly
+from DCLS.construct.modules import Dcls1d
+print("All imports OK")
+print("numpy   :", numpy.__version__)
+print("torch   :", torch.__version__)
+print("CUDA    :", torch.cuda.is_available())
+PY
+
+# ── Run AAD ───────────────────────────────────────────────────────────────────
+echo ""
+echo "================================================"
+echo "  Running: AdaptiveAxonalDelay (PyTorch)"
+echo "================================================"
+
+python3 training/train.py \
+    --models aad_pytorch \
+    --epochs 500 \
+    --datasets-path "$DATA" \
+    --results-dir "$RESULTS"
+AAD_EXIT=$?
+
+[ $AAD_EXIT -ne 0 ] && echo "ERROR: AAD failed (exit $AAD_EXIT)" \
+                     || echo "SUCCESS: AAD completed"
+
+# ── Run DCLS ──────────────────────────────────────────────────────────────────
+echo ""
+echo "================================================"
+echo "  Running: DCLS"
+echo "================================================"
+
+python3 training/train.py \
+    --models dcls \
+    --epochs 500 \
+    --datasets-path "$DATA" \
+    --results-dir "$RESULTS"
+DCLS_EXIT=$?
+
+[ $DCLS_EXIT -ne 0 ] && echo "ERROR: DCLS failed (exit $DCLS_EXIT)" \
+                      || echo "SUCCESS: DCLS completed"
+
+
+#LogBuffer
+python3 training/train.py \
+    --models aad_pytorch aad_log_buffer dcls \
+    --epochs 500 \
+    --datasets-path "$DATA" \
+    --results-dir "$RESULTS"
+
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "================================================"
+echo "  End     : $(date)"
+echo "  AAD     : $([ $AAD_EXIT -eq 0 ] && echo SUCCESS || echo FAILED)"
+echo "  DCLS    : $([ $DCLS_EXIT -eq 0 ] && echo SUCCESS || echo FAILED)"
+echo "  Results : $RESULTS"
+echo "================================================"
+
+[ $AAD_EXIT -ne 0 ] || [ $DCLS_EXIT -ne 0 ] && exit 1
+exit 0
+EOF

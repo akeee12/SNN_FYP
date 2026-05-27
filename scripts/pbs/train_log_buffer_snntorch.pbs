@@ -1,0 +1,180 @@
+#!/bin/bash
+#PBS -N log_buf_snntorch
+#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=8:mem=8gb:ngpus=1
+#PBS -j oe
+#PBS -o /rds/general/user/ak2721/home/logs/log_buf_snntorch.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LogBufferAADSNNTorch — SHD Training Job
+# Log-spaced temporal buffer front-end on AAD V2 backbone
+# Versioned output: results/log_buffer_snntorch/v1/, v2/, ...
+# Submit: qsub scripts/pbs/train_log_buffer_snntorch.pbs
+# ─────────────────────────────────────────────────────────────────────────────
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SHD
+RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP/log_buffer_snntorch
+LOGS=/rds/general/user/ak2721/home/logs
+
+mkdir -p "$RESULTS"
+mkdir -p "$LOGS"
+cd "$REPO"
+
+# ── Modules ───────────────────────────────────────────────────────────────────
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+python3 -m pip install --user --quiet snntorch numpy h5py matplotlib
+
+# ── Pull latest code ──────────────────────────────────────────────────────────
+git pull origin main
+
+# ── Environment check ─────────────────────────────────────────────────────────
+echo "============================================================"
+echo "  Job ID    : $PBS_JOBID"
+echo "  Node      : $(hostname)"
+echo "  Start     : $(date)"
+echo "  Repo      : $REPO"
+echo "  Results   : $RESULTS"
+echo "============================================================"
+
+nvidia-smi
+python3 -c "import torch; print('CUDA:', torch.cuda.is_available())"
+python3 -c "import torch; print('GPU count:', torch.cuda.device_count())"
+python3 -c "import torch; print('GPU :', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU_ONLY')"
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+python3 -c "import snntorch; print('snnTorch:', snntorch.__version__)"
+
+# ── Data check ────────────────────────────────────────────────────────────────
+echo ""
+echo "Checking SHD data files..."
+if [ ! -f "$DATA/shd_train.h5" ]; then
+    echo "ERROR: shd_train.h5 not found at $DATA"
+    exit 1
+fi
+if [ ! -f "$DATA/shd_test.h5" ]; then
+    echo "ERROR: shd_test.h5 not found at $DATA"
+    exit 1
+fi
+echo "Data files OK"
+
+# ── Show existing versions ────────────────────────────────────────────────────
+echo ""
+echo "Existing result versions in $RESULTS:"
+if [ -d "$RESULTS" ]; then
+    ls -d "$RESULTS"/v* 2>/dev/null || echo "  None yet — this will be v1"
+fi
+echo ""
+
+# ── Probe check ───────────────────────────────────────────────────────────────
+echo "Running probe check..."
+python3 -c "
+import sys, math, torch
+sys.path.insert(0, 'models')
+sys.path.insert(0, '.')
+from configs import get_config
+from log_buffer_aad_snntorch import LogBufferAADNetSNNTorch
+
+cfg = get_config('log_buffer_snntorch')
+print('  model_name     :', cfg.model_name)
+print('  tau_s          :', cfg.tau_s)
+print('  tau_r          :', cfg.tau_r)
+print('  threshold      :', cfg.threshold)
+print('  delay_init_cap :', cfg.delay_init_cap)
+print('  lr             :', cfg.lr)
+print('  batch_size     :', cfg.batch_size)
+print('  buffer_size    :', cfg.buffer_size, '(k)')
+print('  buffer_max_lag :', cfg.buffer_max_lag)
+print('  theta_u        :', cfg.theta_u)
+print('  target_true    :', cfg.target_true)
+print('  target_false   :', cfg.target_false)
+
+n_levels      = int(math.log2(cfg.buffer_max_lag))
+expected_lags = [2**i for i in range(n_levels + 1)]
+expected_L    = len(expected_lags)
+print('  lags           :', expected_lags)
+print('  L              :', expected_L)
+
+torch.manual_seed(42)
+model    = LogBufferAADNetSNNTorch(cfg)
+n_params = sum(p.numel() for p in model.parameters())
+print('  n_params       :', f'{n_params:,}')
+
+baseline_fc1 = cfg.n_inputs * cfg.n_hidden
+log_buf_raw  = cfg.n_inputs * cfg.buffer_size + cfg.buffer_size * expected_L * cfg.n_hidden
+saving_pct   = (1.0 - log_buf_raw / baseline_fc1) * 100.0
+print('  param saving   :', f'{saving_pct:.1f}% vs V2 fc1 ({baseline_fc1:,})')
+
+x      = (torch.rand(2, cfg.time_steps, cfg.n_inputs) < 0.05).float()
+labels = torch.randint(0, cfg.n_outputs, (2,))
+
+with torch.no_grad():
+    out = model(x)
+
+print('  output shape   :', tuple(out.shape))
+stats = model.get_delay_stats()
+print('  d1_p95         :', round(stats['delay1']['p95'], 3))
+print('  d2_p95         :', round(stats['delay2']['p95'], 3))
+buf_info = model.get_buffer_info()
+print('  buf k          :', buf_info['k'])
+print('  buf L          :', buf_info['L'])
+print('  buf lags       :', buf_info['lags'])
+print('  STATUS         : OK')
+"
+
+echo ""
+echo "Starting training (500 epochs)..."
+echo "============================================================"
+
+# ── Training ──────────────────────────────────────────────────────────────────
+python3 training/train_log_buffer_snntorch.py \
+    --epochs        500         \
+    --datasets-path "$DATA"     \
+    --base-dir      "$RESULTS"
+
+EXIT_CODE=$?
+
+# ── Post-training summary ─────────────────────────────────────────────────────
+echo ""
+echo "============================================================"
+echo "  End time  : $(date)"
+echo "  Exit code : $EXIT_CODE"
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "  Status    : SUCCESS"
+
+    LATEST_V=$(ls -d "$RESULTS"/v* 2>/dev/null | sort -V | tail -1)
+
+    if [ -n "$LATEST_V" ]; then
+        echo "  Results   : $LATEST_V"
+        python3 -c "
+import json, glob
+summaries = glob.glob('$LATEST_V/*_summary.json')
+if summaries:
+    with open(summaries[0]) as f:
+        s = json.load(f)
+    print('  Best acc     :', f\"{s['best_acc']*100:.2f}%\")
+    print('  Version      :', f\"v{s.get('version','?')}\")
+    print('  n_params     :', f\"{s['n_params']:,}\")
+    print('  buffer k     :', s.get('buffer_k', '?'))
+    print('  buffer L     :', s.get('buffer_L', '?'))
+    print('  buffer lags  :', s.get('buffer_lags', '?'))
+    print('  final thea1  :', s.get('final_thea1', '?'))
+    print('  final thea2  :', s.get('final_thea2', '?'))
+    accs = s.get('test_accs', [])
+    if accs:
+        print('  Last 5 accs :', [f\"{a*100:.2f}%\" for a in accs[-5:]])
+else:
+    print('  No summary file found in $LATEST_V')
+"
+    fi
+else
+    echo "  Status    : FAILED (exit code $EXIT_CODE)"
+fi
+
+echo "============================================================"
+echo ""
+echo "LogBufferAADSNNTorch training complete: $(date)"
