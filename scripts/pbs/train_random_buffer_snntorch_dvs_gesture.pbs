@@ -13,7 +13,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 REPO=/rds/general/user/ak2721/home/SNN_FYP
-DATA=/rds/general/user/ak2721/home/datasets/SHD
+DATA=/rds/general/user/ak2721/home/datasets/DVS
 RESULTS=/rds/general/user/ak2721/home/results/SNN_FYP/random_tap_dvs
 LOGS=/rds/general/user/ak2721/home/logs
 
