@@ -551,18 +551,20 @@ def main():
     if args.gamma is not None:
         cfg.gamma = args.gamma
 
-    if args.num_taps is not None:
+    # FIX: resolve max_lag BEFORE generating taps so --buffer-max-lag
+    # takes precedence over the default max_lag_for_n(n) value.
+    if args.buffer_max_lag is not None:
+        cfg.buffer_max_lag = args.buffer_max_lag
+    elif args.num_taps is not None:
         cfg.buffer_max_lag = max_lag_for_n(args.num_taps)
+
+    # Now generate taps against the correct max_lag
+    if args.num_taps is not None:
         cfg.taps = make_power_law_taps(
             args.num_taps, cfg.buffer_max_lag, cfg.gamma
         )
         print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} -> "
               f"taps={cfg.taps}  max_lag={cfg.buffer_max_lag}")
-
-    # buffer_max_lag override — must come after num_taps
-    if args.buffer_max_lag is not None:
-        cfg.buffer_max_lag = args.buffer_max_lag
-        print(f"  [max_lag override] buffer_max_lag={cfg.buffer_max_lag}")
 
     run_name = make_run_name(cfg, args.network_size)
 
