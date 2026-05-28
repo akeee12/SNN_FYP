@@ -30,6 +30,7 @@ from configs.random_tap_snntorch_config import RandomTapSNNTorchConfig
 from configs.power_law_tap_snntorch_config import PowerLawTapSNNTorchConfig
 from configs.log_ring_buffer_snntorch_config import LogRingBufferSNNTorchConfig
 from configs.dcls_log_ring_buffer_config import DCLSLogRingBufferConfig
+from configs.dcls_power_law_ring_buffer_config import DCLSPowerLawRingBufferConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
@@ -53,7 +54,8 @@ MODEL_REGISTRY = {
     "random_tap_snntorch": RandomTapSNNTorchConfig,
     "power_law_tap_snntorch": PowerLawTapSNNTorchConfig,
     "log_ring_buffer_snntorch": LogRingBufferSNNTorchConfig,
-    "dcls_log_ring_buffer":DCLSLogRingBufferConfig
+    "dcls_log_ring_buffer":DCLSLogRingBufferConfig,
+    "dcls_power_law_ring buffer":DCLSPowerLawRingBufferConfig
 
 }
 
