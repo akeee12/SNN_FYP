@@ -59,20 +59,33 @@ class DVSGestureDataset(Dataset):
         self.n_inputs   = n_inputs
         self.max_time   = max_time
         self.hdf5_path  = os.path.join(path, f"dvs_{split}.h5")
+
         print(f"  Loading DVS {split} from {self.hdf5_path}")
         with h5py.File(self.hdf5_path, "r") as f:
-            self.labels    = f["labels"][:]
+            self.labels    = f["labels"][:]          # load labels into RAM
             self.n_samples = len(self.labels)
         print(f"  {split}: {self.n_samples} samples, "
               f"{len(set(self.labels))} classes")
+
+        # FIX 6: per-worker HDF5 handle — initialised lazily in each worker
+        # so it is never shared across processes.
+        self._hdf5_file = None
+
+    def _get_file(self):
+        """Open the HDF5 file once per worker process (lazy init)."""
+        if self._hdf5_file is None:
+            self._hdf5_file = h5py.File(self.hdf5_path, "r")
+        return self._hdf5_file
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        with h5py.File(self.hdf5_path, "r") as f:
-            times = f["spikes"]["times"][idx]
-            units = f["spikes"]["units"][idx]
+        # FIX 6: reuse the per-worker handle instead of open/close per sample
+        f     = self._get_file()
+        times = f["spikes"]["times"][idx]
+        units = f["spikes"]["units"][idx]
+
         label  = int(self.labels[idx])
         t_idx  = np.floor(
             times / self.max_time * self.time_steps).astype(int)
@@ -93,41 +106,96 @@ class DVSGestureDataset(Dataset):
         spikes[t_idx, u_idx] = 1.0
         return spikes, label
 
+    def __del__(self):
+        """Close the HDF5 handle when the worker is torn down."""
+        if self._hdf5_file is not None:
+            try:
+                self._hdf5_file.close()
+            except Exception:
+                pass
+            self._hdf5_file = None
+
 
 def get_loaders(cfg):
     return (
         DataLoader(
             DVSGestureDataset(cfg.datasets_path, "train"),
-            batch_size=cfg.batch_size, shuffle=True,
-            num_workers=cfg.num_workers, pin_memory=True,
+            batch_size  = cfg.batch_size,
+            shuffle     = True,
+            num_workers = cfg.num_workers,
+            pin_memory  = True,
+            # FIX 6: each worker gets its own copy of the dataset object
+            # so the lazy HDF5 handle is never shared
+            persistent_workers = cfg.num_workers > 0,
         ),
         DataLoader(
             DVSGestureDataset(cfg.datasets_path, "test"),
-            batch_size=cfg.batch_size, shuffle=False,
-            num_workers=cfg.num_workers, pin_memory=True,
+            batch_size  = cfg.batch_size,
+            shuffle     = False,
+            num_workers = cfg.num_workers,
+            pin_memory  = True,
+            persistent_workers = cfg.num_workers > 0,
         ),
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAP GENERATION
+# TAP GENERATION  (FIX 1: forward + backward repair instead of hard crash)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def make_power_law_taps(n, max_lag, gamma):
+    """
+    Generate n strictly-increasing tap positions in [1, max_lag] following
+    a power-law spacing:  t_i = round(max_lag * (i/(n-1))^gamma)
+
+    Collisions caused by small max_lag / large gamma are resolved by:
+      1. Forward pass  — nudge each tap up by 1 if it equals the previous.
+      2. Backward pass — pull taps back if the forward pass pushed them
+                         into or past max_lag.
+
+    Raises ValueError if n > max_lag (geometrically impossible).
+    """
     if n < 2:
         raise ValueError(f"n must be >= 2, got {n}")
+    if n > max_lag:
+        raise ValueError(
+            f"Cannot place {n} distinct taps in [1, {max_lag}]: "
+            f"need n <= max_lag.  Reduce n or increase max_lag."
+        )
     if n == 2:
         return [1, max_lag]
-    taps = []
-    for i in range(n):
-        t = max_lag * ((i / (n - 1)) ** gamma)
-        taps.append(max(1, round(t)))
+
+    # 1. Raw power-law positions
+    taps = [max(1, round(max_lag * ((i / (n - 1)) ** gamma)))
+            for i in range(n)]
+
+    # 2. Pin endpoints
     taps[0]  = 1
     taps[-1] = max_lag
+
+    # 3. Forward pass: ensure strict increase
+    for i in range(1, len(taps) - 1):
+        if taps[i] <= taps[i - 1]:
+            taps[i] = taps[i - 1] + 1
+
+    # 4. Backward pass: repair any taps pushed into / past max_lag
+    for i in range(len(taps) - 2, 0, -1):
+        if taps[i] >= taps[i + 1]:
+            taps[i] = taps[i + 1] - 1
+
+    # 5. Sanity checks
+    if taps[0] < 1 or taps[-1] != max_lag:
+        raise ValueError(
+            f"Tap repair failed endpoint check: {taps}\n"
+            f"  n={n}, max_lag={max_lag}, gamma={gamma}"
+        )
     if len(set(taps)) != n:
         raise ValueError(
-            f"Duplicate taps: {taps}  n={n} max_lag={max_lag} gamma={gamma}"
+            f"Could not resolve duplicate taps after repair: {taps}\n"
+            f"  n={n}, max_lag={max_lag}, gamma={gamma}\n"
+            f"  Try reducing n or increasing max_lag."
         )
+
     return taps
 
 
@@ -140,7 +208,8 @@ def max_lag_for_n(n):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def make_run_name(cfg, network_size):
-    n = len(cfg.taps)
+    # FIX 4: guard against cfg.taps not yet being set
+    n = len(cfg.taps) if hasattr(cfg, "taps") and cfg.taps else 0
     return (f"k{cfg.buffer_size}_n{n}"
             f"_lag{cfg.buffer_max_lag}"
             f"_g{cfg.gamma:.1f}"
@@ -245,12 +314,12 @@ class DelayScheduler:
 
     def state_dict(self):
         return {
-            "thea1": self.thea1, "thea2": self.thea2,
+            "thea1"  : self.thea1,  "thea2"  : self.thea2,
             "update1": self.update1, "update2": self.update2,
         }
 
     def load_state_dict(self, state):
-        self.thea1   = state["thea1"];  self.thea2   = state["thea2"]
+        self.thea1   = state["thea1"];   self.thea2   = state["thea2"]
         self.update1 = state["update1"]; self.update2 = state["update2"]
 
 
@@ -334,25 +403,25 @@ def train(cfg, results_dir, network_size, resume_path=None):
               f"best={best_acc*100:.2f}%\n")
 
     config_snapshot = {
-        "run_name"          : run_name,
-        "model_name"        : cfg.model_name,
-        "dataset"           : DATASET_NAME,
-        "n_inputs"          : N_INPUTS,
-        "n_outputs"         : N_OUTPUTS,
-        "time_steps"        : TIME_STEPS,
-        "network_size"      : network_size,
-        "n_hidden"          : cfg.n_hidden,
-        "tap_strategy"      : "power_law",
-        "storage"           : "ring",
-        "gamma"             : cfg.gamma,
-        "taps"              : cfg.taps,
-        "n_taps"            : len(cfg.taps),
-        "buffer_size"       : cfg.buffer_size,
-        "buffer_max_lag"    : cfg.buffer_max_lag,
-        "lr"                : cfg.lr,
-        "batch_size"        : cfg.batch_size,
-        "epochs"            : cfg.epochs,
-        "seed"              : cfg.seed,
+        "run_name"       : run_name,
+        "model_name"     : cfg.model_name,
+        "dataset"        : DATASET_NAME,
+        "n_inputs"       : N_INPUTS,
+        "n_outputs"      : N_OUTPUTS,
+        "time_steps"     : TIME_STEPS,
+        "network_size"   : network_size,
+        "n_hidden"       : cfg.n_hidden,
+        "tap_strategy"   : "power_law",
+        "storage"        : "ring",
+        "gamma"          : cfg.gamma,
+        "taps"           : cfg.taps,
+        "n_taps"         : len(cfg.taps),
+        "buffer_size"    : cfg.buffer_size,
+        "buffer_max_lag" : cfg.buffer_max_lag,
+        "lr"             : cfg.lr,
+        "batch_size"     : cfg.batch_size,
+        "epochs"         : cfg.epochs,
+        "seed"           : cfg.seed,
     }
     with open(os.path.join(results_dir, "config.json"), "w") as f:
         json.dump(config_snapshot, f, indent=2)
@@ -541,31 +610,34 @@ def main():
 
     cfg = get_config("power_law_tap_snntorch")
 
+    # ── Basic overrides ───────────────────────────────────────────────────────
     if args.epochs        is not None: cfg.epochs        = args.epochs
     if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
     if args.buffer_size   is not None: cfg.buffer_size   = args.buffer_size
     if args.theta_u       is not None: cfg.theta_u       = args.theta_u
+    if args.gamma         is not None: cfg.gamma         = args.gamma
 
     cfg.n_hidden = NETWORK_SIZES[args.network_size]
 
-    if args.gamma is not None:
-        cfg.gamma = args.gamma
-
-    # FIX: resolve max_lag BEFORE generating taps so --buffer-max-lag
-    # takes precedence over the default max_lag_for_n(n) value.
+    # ── FIX 2+3: resolve max_lag BEFORE taps; keep buffer_size >= max_lag ────
     if args.buffer_max_lag is not None:
         cfg.buffer_max_lag = args.buffer_max_lag
     elif args.num_taps is not None:
         cfg.buffer_max_lag = max_lag_for_n(args.num_taps)
 
-    # Now generate taps against the correct max_lag
+    # FIX 3: buffer_size must be at least max_lag
+    cfg.buffer_size = max(cfg.buffer_size, cfg.buffer_max_lag)
+
+    # ── FIX 1+5: generate taps and sync n_taps ───────────────────────────────
     if args.num_taps is not None:
-        cfg.taps = make_power_law_taps(
+        cfg.taps   = make_power_law_taps(
             args.num_taps, cfg.buffer_max_lag, cfg.gamma
         )
-        print(f"  [tap gen] n={args.num_taps} gamma={cfg.gamma} -> "
-              f"taps={cfg.taps}  max_lag={cfg.buffer_max_lag}")
+        cfg.n_taps = len(cfg.taps)          # FIX 5: keep n_taps in sync
+        print(f"  [tap gen] n={args.num_taps}  gamma={cfg.gamma}"
+              f"  max_lag={cfg.buffer_max_lag}  -> taps={cfg.taps}")
 
+    # ── FIX 4: run_name built AFTER taps are finalised ───────────────────────
     run_name = make_run_name(cfg, args.network_size)
 
     if args.base_dir is not None:
