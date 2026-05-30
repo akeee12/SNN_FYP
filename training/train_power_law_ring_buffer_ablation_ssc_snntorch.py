@@ -682,5 +682,5 @@ def main():
     train(cfg, results_dir, args.network_size, resume_path=args.resume)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": #ddd
     main()
