@@ -55,7 +55,7 @@ MODEL_REGISTRY = {
     "power_law_tap_snntorch": PowerLawTapSNNTorchConfig,
     "log_ring_buffer_snntorch": LogRingBufferSNNTorchConfig,
     "dcls_log_ring_buffer":DCLSLogRingBufferConfig,
-    "dcls_power_law_ring buffer":DCLSPowerLawRingBufferConfig
+    "dcls_power_law_ring_buffer":DCLSPowerLawRingBufferConfig
 
 }
 
