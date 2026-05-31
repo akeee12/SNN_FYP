@@ -173,42 +173,42 @@ class DCLSPowerLawRingBufferNet(nn.Module):
 
         # ── DCLS convolutional layers ──────────────────────────────────
         self.dcls1 = Dcls1d(
-            in_channels      = cfg.n_hidden_neurons,
-            out_channels     = cfg.n_hidden_neurons,
-            kernel_count     = cfg.kernel_count,
+            in_channels         = cfg.n_hidden_neurons,
+            out_channels        = cfg.n_hidden_neurons,
+            kernel_count        = cfg.kernel_count,
             dilated_kernel_size = cfg.max_delay,
-            stride           = 1,
-            padding          = cfg.max_delay // 2,
-            groups           = 1,
-            bias             = False,
-            version          = "gauss",
+            stride              = 1,
+            padding             = cfg.max_delay // 2,
+            groups              = 1,
+            bias                = False,
+            version             = "gauss",
         )
         self.dcls2 = Dcls1d(
-            in_channels      = cfg.n_hidden_neurons,
-            out_channels     = cfg.n_hidden_neurons,
-            kernel_count     = cfg.kernel_count,
+            in_channels         = cfg.n_hidden_neurons,
+            out_channels        = cfg.n_hidden_neurons,
+            kernel_count        = cfg.kernel_count,
             dilated_kernel_size = cfg.max_delay,
-            stride           = 1,
-            padding          = cfg.max_delay // 2,
-            groups           = 1,
-            bias             = False,
-            version          = "gauss",
+            stride              = 1,
+            padding             = cfg.max_delay // 2,
+            groups              = 1,
+            bias                = False,
+            version             = "gauss",
         )
 
         # ── LIF neurons ───────────────────────────────────────────────
         surr = surrogate.ATan()
 
         self.lif1 = neuron.LIFNode(
-            tau             = cfg.init_tau,
-            v_threshold     = cfg.v_threshold,
+            tau                = cfg.init_tau,
+            v_threshold        = cfg.v_threshold,
             surrogate_function = surr,
-            detach_reset    = True,
+            detach_reset       = True,
         )
         self.lif2 = neuron.LIFNode(
-            tau             = cfg.init_tau,
-            v_threshold     = cfg.v_threshold,
+            tau                = cfg.init_tau,
+            v_threshold        = cfg.v_threshold,
             surrogate_function = surr,
-            detach_reset    = True,
+            detach_reset       = True,
         )
 
         # ── Batch norm + dropout ──────────────────────────────────────
@@ -273,7 +273,9 @@ class DCLSPowerLawRingBufferNet(nn.Module):
         )
         for m in self.modules():
             if isinstance(m, Dcls1d):
-                m.SIG = sigma
+                # SIG is an nn.Parameter — update its data in-place
+                # rather than replacing the attribute directly.
+                m.SIG.data.fill_(sigma)
         return sigma
 
     # ─────────────────────────────────────────────────────────────────
