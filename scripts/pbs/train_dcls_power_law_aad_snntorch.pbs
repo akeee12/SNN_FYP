@@ -35,7 +35,7 @@ python3 -c "import torch; print('CUDA:', torch.cuda.is_available())"
 python3 -c "import torch; print('GPU count:', torch.cuda.device_count())"
 python3 -c "import torch; print('GPU :', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU_ONLY')"
 python3 -c "import torch; print('PyTorch:', torch.__version__)"
-python3 -c "import spikingjelly; print('SpikingJelly:', spikingjelly.__version__)"
+python3 -c "import importlib.metadata; print('SpikingJelly:', importlib.metadata.version('spikingjelly'))"
 
 echo ""
 echo "Checking SHD data files..."
@@ -85,8 +85,7 @@ model    = DCLSPowerLawRingBufferNet(cfg)
 n_params = sum(p.numel() for p in model.parameters())
 print('  n_params       :', f'{n_params:,}')
 
-x = torch.zeros(2, cfg.n_inputs, cfg.time_steps)
-x[x < 0.05] = 1.0
+x = (torch.rand(2, cfg.n_inputs, cfg.time_steps) < 0.05).float()
 with torch.no_grad():
     model.reset()
     out = model(x)
@@ -99,6 +98,11 @@ print('  buf L          :', buf_info['L'])
 print('  buf taps       :', buf_info['taps'])
 print('  STATUS         : OK')
 "
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: probe check failed"
+    exit 1
+fi
 
 echo ""
 echo "Starting training (100 epochs, SHD)..."
@@ -149,4 +153,3 @@ fi
 echo "============================================================"
 echo ""
 echo "DCLSPowerLawRingBufferNet training complete: $(date)"
-

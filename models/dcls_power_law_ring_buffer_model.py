@@ -199,13 +199,13 @@ class DCLSPowerLawRingBufferNet(nn.Module):
         surr = surrogate.ATan()
 
         self.lif1 = neuron.LIFNode(
-            tau             = cfg.tau,
+            tau             = cfg.init_tau,
             v_threshold     = cfg.v_threshold,
             surrogate_function = surr,
             detach_reset    = True,
         )
         self.lif2 = neuron.LIFNode(
-            tau             = cfg.tau,
+            tau             = cfg.init_tau,
             v_threshold     = cfg.v_threshold,
             surrogate_function = surr,
             detach_reset    = True,
