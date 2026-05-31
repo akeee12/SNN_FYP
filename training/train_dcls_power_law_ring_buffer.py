@@ -60,7 +60,49 @@ def get_versioned_dir(base_dir: str) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATASETS  (identical to train_dcls_log_ring_buffer.py)
+# DATASET SUBDIRECTORY MAPPING
+# Each dataset lives in its own subfolder under the base datasets_path.
+# Override with --datasets-path to point at the *base* directory, e.g.:
+#   /rds/general/user/ak2721/home/datasets
+# The correct subfolder is then appended automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DATASET_SUBDIRS = {
+    "shd": "SHD",
+    "ssc": "SSC",
+    "dvs": "DVS_Gesture",
+}
+
+
+def get_dataset_path(base_path: str, dataset_name: str) -> str:
+    """
+    Resolve the on-disk directory for a given dataset.
+
+    Tries two layouts:
+      1. base_path/<SUBDIR>   e.g. .../datasets/SSC
+      2. base_path            (user pointed directly at the dataset folder)
+    """
+    subdir     = DATASET_SUBDIRS[dataset_name]
+    candidate  = os.path.join(base_path, subdir)
+    split_name = "train"
+    probe_file = os.path.join(candidate,
+                              f"{dataset_name}_{split_name}.h5")
+    if os.path.isfile(probe_file):
+        return candidate
+
+    # Fall back: maybe base_path already *is* the dataset folder
+    probe_file2 = os.path.join(base_path,
+                               f"{dataset_name}_{split_name}.h5")
+    if os.path.isfile(probe_file2):
+        return base_path
+
+    # Return the canonical path anyway — the Dataset class will raise a
+    # clear FileNotFoundError with the full path.
+    return candidate
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATASETS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SHDDataset(Dataset):
@@ -201,14 +243,20 @@ def get_loaders(cfg, dataset_name: str):
     defaults                = DATASET_DEFAULTS[dataset_name]
     train_split, test_split = DATASET_SPLITS[dataset_name]
 
+    # Resolve the correct on-disk directory for this dataset.
+    # cfg.datasets_path is the *base* datasets root, e.g.:
+    #   /rds/general/user/ak2721/home/datasets
+    # get_dataset_path appends the right subfolder (SHD / SSC / DVS_Gesture).
+    dataset_path = get_dataset_path(cfg.datasets_path, dataset_name)
+
     train_ds = cls(
-        cfg.datasets_path, train_split,
+        dataset_path, train_split,
         defaults["time_steps"],
         defaults["n_inputs"],
         defaults["max_time"],
     )
     test_ds = cls(
-        cfg.datasets_path, test_split,
+        dataset_path, test_split,
         defaults["time_steps"],
         defaults["n_inputs"],
         defaults["max_time"],
@@ -545,7 +593,11 @@ def main():
         description="Train DCLSPowerLawRingBufferNet on SHD/SSC/DVS"
     )
     parser.add_argument("--epochs",        type=int,   default=None)
-    parser.add_argument("--datasets-path", type=str,   default=None)
+    parser.add_argument("--datasets-path", type=str,   default=None,
+                        help="Base datasets root, e.g. "
+                             "/rds/.../datasets  "
+                             "(subfolders SHD/, SSC/, DVS_Gesture/ "
+                             "are appended automatically)")
     parser.add_argument("--base-dir",      type=str,   default=None)
     parser.add_argument("--resume",        type=str,   default=None)
     parser.add_argument("--dataset",       type=str,   default="shd",
