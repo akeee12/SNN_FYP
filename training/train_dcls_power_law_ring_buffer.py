@@ -68,9 +68,9 @@ def get_versioned_dir(base_dir: str) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 
 DATASET_SUBDIRS = {
-    "shd": "SHD",
-    "ssc": "SSC",
-    "dvs": "DVS_Gesture",
+    "shd": "SHD",       # .../datasets/SHD/shd_train.h5
+    "ssc": "SSC",       # .../datasets/SSC/ssc_train.h5
+    "dvs": "DVS",       # .../datasets/DVS/dvs_train.h5
 }
 
 
