@@ -178,111 +178,172 @@ class LogRingBufferInput(nn.Module):
 # FULL NETWORK
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LogRingBufferInput(nn.Module):
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FULL NETWORK
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DCLSLogRingBufferNet(nn.Module):
     """
-    Replaces the binning + fc_in input stage of DCLSNet.
+    DCLS SNN with log ring buffer replacing binning + fc_in.
 
-    Processes (B, n_inputs, T) by stepping through the time
-    dimension and maintaining a history of k-dim projections.
-
-    Gradient-safe implementation:
-        - Projections are stored in a Python list (not a pre-allocated
-          tensor) so autograd can trace through fc_proj and fc_expand.
-        - The ring buffer index arithmetic is preserved for reading
-          past projections, but writes go into a list rather than
-          an in-place tensor assignment.
-
-    At each timestep t:
-      1. Project x_t → p_t ∈ R^k via fc_proj.
-      2. Append p_t to history list.
-      3. Read L log-spaced taps from history (zero-pad if not enough
-         history yet).
-      4. Concatenate → (B, k*L), expand → (B, n_hidden) via fc_expand.
-      5. Scale by theta_u.
+    Args:
+        x: (B, n_inputs, T)  — channels-first, permuted in training script
+    Returns:
+        out: (B, n_outputs)  — raw logits for CrossEntropy
     """
 
-    def __init__(
-        self,
-        n_inputs    : int,
-        n_hidden    : int,
-        buffer_size : int,
-        max_lag     : int,
-        taps        : list,
-        theta_u     : float = 0.5,
-    ):
+    def __init__(self, cfg):
         super().__init__()
+        self.cfg = cfg
 
-        if len(taps) == 0:
-            raise ValueError("taps list must not be empty")
-        if max(taps) > max_lag:
-            raise ValueError(
-                f"max tap {max(taps)} exceeds max_lag {max_lag}"
+        # ── Log ring buffer input (replaces bin + fc_in) ──────────────
+        self.buffer_input = LogRingBufferInput(
+            n_inputs    = cfg.n_inputs,
+            n_hidden    = cfg.n_hidden_neurons,
+            buffer_size = cfg.buffer_size,
+            max_lag     = cfg.buffer_max_lag,
+            taps        = cfg.taps,
+            theta_u     = cfg.theta_u,
+        )
+
+        # ── DCLS delay layers — identical to DCLSNet ──────────────────
+        self.dcls1 = Dcls1d(
+            in_channels         = cfg.n_hidden_neurons,
+            out_channels        = cfg.n_hidden_neurons,
+            kernel_count        = cfg.kernel_count,
+            dilated_kernel_size = cfg.max_delay,
+            padding             = cfg.left_padding,
+            groups              = 1,
+            bias                = cfg.bias,
+            version             = cfg.DCLSversion,
+        )
+        self.dcls2 = Dcls1d(
+            in_channels         = cfg.n_hidden_neurons,
+            out_channels        = cfg.n_hidden_neurons,
+            kernel_count        = cfg.kernel_count,
+            dilated_kernel_size = cfg.max_delay,
+            padding             = cfg.left_padding,
+            groups              = 1,
+            bias                = cfg.bias,
+            version             = cfg.DCLSversion,
+        )
+
+        nn.init.uniform_(self.dcls1.P, cfg.init_pos_a, cfg.init_pos_b)
+        nn.init.uniform_(self.dcls2.P, cfg.init_pos_a, cfg.init_pos_b)
+        self.dcls1.SIG.data.fill_(cfg.sigInit)
+        self.dcls2.SIG.data.fill_(cfg.sigInit)
+
+        # ── LIF neurons — identical to DCLSNet ────────────────────────
+        self.lif1 = neuron.LIFNode(
+            tau                = cfg.init_tau,
+            v_threshold        = cfg.v_threshold,
+            surrogate_function = surrogate.ATan(alpha=cfg.alpha),
+            detach_reset       = cfg.detach_reset,
+            step_mode          = 'm',
+        )
+        self.lif2 = neuron.LIFNode(
+            tau                = cfg.init_tau,
+            v_threshold        = cfg.v_threshold,
+            surrogate_function = surrogate.ATan(alpha=cfg.alpha),
+            detach_reset       = cfg.detach_reset,
+            step_mode          = 'm',
+        )
+
+        # ── Batch norm — identical to DCLSNet ─────────────────────────
+        self.bn1 = nn.BatchNorm1d(cfg.n_hidden_neurons) \
+                   if cfg.use_batchnorm else nn.Identity()
+        self.bn2 = nn.BatchNorm1d(cfg.n_hidden_neurons) \
+                   if cfg.use_batchnorm else nn.Identity()
+
+        # ── Dropout — identical to DCLSNet ────────────────────────────
+        self.drop1 = nn.Dropout(cfg.dropout_p)
+        self.drop2 = nn.Dropout(cfg.dropout_p)
+
+        # ── Output FC — identical to DCLSNet ──────────────────────────
+        self.fc_out = nn.Linear(
+            cfg.n_hidden_neurons,
+            cfg.n_outputs,
+            bias=cfg.bias,
+        )
+
+        # ── Sigma annealing state — identical to DCLSNet ──────────────
+        self.current_epoch       = 0
+        self.final_epoch         = cfg.final_epoch
+        self.sigInit             = cfg.sigInit
+        self.decrease_sig_method = cfg.decrease_sig_method
+
+    def _compute_sigma(self) -> float:
+        if self.current_epoch >= self.final_epoch:
+            return 0.5
+        if self.decrease_sig_method == "exp":
+            ratio = self.current_epoch / max(self.final_epoch, 1)
+            return max(
+                self.sigInit * (0.5 / self.sigInit) ** ratio,
+                0.5
             )
-        if min(taps) < 1:
-            raise ValueError(
-                f"all taps must be >= 1, got min={min(taps)}"
+        else:
+            return max(
+                self.sigInit - (self.sigInit - 0.5) *
+                self.current_epoch / max(self.final_epoch, 1),
+                0.5
             )
 
-        self.k       = buffer_size
-        self.max_lag = max_lag
-        self.taps    = taps
-        self.L       = len(taps)
-        self.theta_u = theta_u
+    def update_sigma(self) -> float:
+        """Update sigma — call once per epoch after training loop."""
+        sigma = self._compute_sigma()
+        self.dcls1.SIG.data.fill_(sigma)
+        self.dcls2.SIG.data.fill_(sigma)
+        self.current_epoch += 1
+        return sigma
 
-        # Plain Linear — no weight_norm, consistent with DCLS style
-        self.fc_proj   = nn.Linear(n_inputs,        self.k,   bias=False)
-        self.fc_expand = nn.Linear(self.k * self.L, n_hidden, bias=False)
+    def get_delay_params(self):
+        """Delay position parameters for separate optimiser."""
+        return [self.dcls1.P, self.dcls2.P]
 
-        nn.init.xavier_uniform_(self.fc_proj.weight)
-        nn.init.xavier_uniform_(self.fc_expand.weight)
+    def get_weight_params(self):
+        """
+        All non-delay parameters for weight optimiser.
+        Buffer params (fc_proj, fc_expand) are included here.
+        """
+        delay_ids = {id(self.dcls1.P), id(self.dcls2.P)}
+        return [p for p in self.parameters()
+                if id(p) not in delay_ids]
 
-    # ─────────────────────────────────────────────────────────────────
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Process full sequence in one call.
-
         Args:
-            x : (B, n_inputs, T) — channels-first DCLS format
-
+            x: (B, n_inputs, T) — channels-first, permuted in training script
         Returns:
-            out : (B, n_hidden, T) — ready for dcls1
+            out: (B, n_outputs) — raw logits
         """
-        B, C, T = x.shape
+        # ── Log ring buffer: (B, n_inputs, T) → (B, n_hidden, T) ─────
+        x = self.buffer_input(x)               # (B, 256, T)
 
-        # history[t] = fc_proj(x[:, :, t]) — shape (B, k)
-        # stored as a list so autograd traces through fc_proj
-        history = []
-        out_steps = []
+        # ── DCLS layer 1 — identical to DCLSNet ───────────────────────
+        x = self.dcls1(x)                      # (B, 256, T)
+        x = self.lif1(x.permute(2, 0, 1))     # (T, B, 256)
+        x = x.permute(1, 2, 0)                # (B, 256, T)
+        x = self.bn1(x)
+        x = self.drop1(x)
 
-        # zero tensor used for padding when history is not deep enough
-        zero = torch.zeros(B, self.k, device=x.device, dtype=x.dtype)
+        # ── DCLS layer 2 — identical to DCLSNet ───────────────────────
+        x = self.dcls2(x)                      # (B, 256, T)
+        x = self.lif2(x.permute(2, 0, 1))     # (T, B, 256)
+        x = x.permute(1, 2, 0)                # (B, 256, T)
+        x = self.bn2(x)
+        x = self.drop2(x)
 
-        for t in range(T):
-            # 1. Project current timestep → (B, k)
-            p_t = self.fc_proj(x[:, :, t])   # (B, k)
-            history.append(p_t)
+        # ── Readout — identical to DCLSNet ────────────────────────────
+        x = x.mean(dim=-1)                     # (B, 256)
+        x = self.fc_out(x)                     # (B, n_outputs)
+        return x
 
-            # 2. Read log-spaced taps from history
-            #    lag l → history[t - l] if t >= l else zero
-            tap_reads = []
-            for lag in self.taps:
-                idx = t - lag
-                if idx >= 0:
-                    tap_reads.append(history[idx])
-                else:
-                    tap_reads.append(zero)
+    def reset(self):
+        """Reset LIF neuron states — called before each sequence."""
+        self.lif1.reset()
+        self.lif2.reset()
 
-            # 3. Concatenate → (B, k*L), expand → (B, n_hidden), scale
-            feat = torch.cat(tap_reads, dim=-1)      # (B, k*L)
-            cur  = self.fc_expand(feat)              # (B, n_hidden)
-            out_steps.append(cur * self.theta_u)
-
-        return torch.stack(out_steps, dim=-1)        # (B, n_hidden, T)
-
-    def get_info(self) -> dict:
-        return {
-            "k"      : self.k,
-            "L"      : self.L,
-            "taps"   : self.taps,
-            "storage": "ring",
-        }
+    def get_buffer_info(self) -> dict:
+        return self.buffer_input.get_info()

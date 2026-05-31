@@ -1,0 +1,317 @@
+#!/bin/bash
+#PBS -N pl_ring_ablation_ssc
+#PBS -l walltime=18:00:00
+#PBS -l select=1:ncpus=5:mem=12gb:ngpus=1:gpu_type=RTX6000
+#PBS -j oe
+#PBS -J 1-12
+#PBS -o /rds/general/user/ak2721/home/logs/ablation_pl_ring_ssc_^array_index^.log
+
+REPO=/rds/general/user/ak2721/home/SNN_FYP
+DATA=/rds/general/user/ak2721/home/datasets/SSC
+ABLATION_ROOT=/rds/general/user/ak2721/home/results/SNN_FYP/ablation_power_law_ssc
+LOGS=/rds/general/user/ak2721/home/logs
+
+GAMMA=2.0
+
+mkdir -p "$LOGS"
+cd "$REPO"
+
+RUNS=(
+    ""
+    "5 small"
+    "5 medium"
+    "5 large"
+    "6 small"
+    "6 medium"
+    "6 large"
+    "7 small"
+    "7 medium"
+    "7 large"
+    "8 small"
+    "8 medium"
+    "8 large"
+)
+
+IDX=$PBS_ARRAY_INDEX
+RUN="${RUNS[$IDX]}"
+
+if [ -z "$RUN" ]; then
+    echo "ERROR: empty RUN for IDX=$IDX"
+    exit 1
+fi
+
+NUM_TAPS=$(echo "$RUN" | awk '{print $1}')
+NET_SIZE=$(echo "$RUN"  | awk '{print $2}')
+
+MAX_LAG=$(python3 -c "print(2**($NUM_TAPS-1))")
+
+module purge
+module load tools/prod
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+
+python3 -m pip install --user --quiet snntorch numpy h5py
+
+git pull origin main
+
+echo "============================================================"
+echo "  Ablation job  : $PBS_JOBID  (array index $IDX / 12)"
+echo "  Dataset       : SSC (Spiking Speech Commands)"
+echo "  Run config    : n=$NUM_TAPS  size=$NET_SIZE  max_lag=$MAX_LAG  gamma=$GAMMA"
+echo "  Node          : $(hostname)"
+echo "  Start         : $(date)"
+echo "============================================================"
+
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+python3 -c "import torch; print('CUDA:', torch.cuda.is_available(), '| GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+python3 -c "import snntorch; print('snnTorch:', snntorch.__version__)"
+
+echo ""
+echo "Checking SSC data files..."
+if [ ! -f "$DATA/ssc_train.h5" ]; then
+    echo "ERROR: ssc_train.h5 not found at $DATA"
+    exit 1
+fi
+if [ ! -f "$DATA/ssc_test.h5" ]; then
+    echo "ERROR: ssc_test.h5 not found at $DATA"
+    exit 1
+fi
+echo "Data files OK"
+
+mkdir -p "$ABLATION_ROOT"
+
+get_ablation_version_dir() {
+    local root="$1"
+    local best=-1
+    local best_dir=""
+    if [ -d "$root" ]; then
+        for d in "$root"/v*/; do
+            if [ -f "${d}ablation_config.json" ]; then
+                vnum="${d%/}"
+                vnum="${vnum##*/v}"
+                if [ "$vnum" -gt "$best" ] 2>/dev/null; then
+                    best=$vnum
+                    best_dir="${d%/}"
+                fi
+            fi
+        done
+    fi
+    echo "$best_dir"
+}
+
+if [ "$IDX" -eq 1 ]; then
+    echo ""
+    echo "Job 1: initialising ablation version directory..."
+    python3 - <<'PYEOF'
+import os, json, time, fcntl
+
+root  = os.environ.get("ABLATION_ROOT",
+        "/rds/general/user/ak2721/home/results/SNN_FYP/ablation_power_law_ssc")
+gamma = float(os.environ.get("GAMMA", "2.0"))
+
+lock_path = os.path.join(root, ".version_lock")
+os.makedirs(root, exist_ok=True)
+with open(lock_path, "w") as lf:
+    fcntl.flock(lf, fcntl.LOCK_EX)
+    existing = []
+    for entry in os.scandir(root):
+        if entry.is_dir() and entry.name.startswith("v"):
+            try:
+                existing.append(int(entry.name[1:]))
+            except ValueError:
+                pass
+    version     = max(existing) + 1 if existing else 1
+    version_dir = os.path.join(root, f"v{version}")
+    os.makedirs(version_dir, exist_ok=True)
+    ablation_cfg = {
+        "version"        : version,
+        "created_at"     : time.strftime("%Y-%m-%d %H:%M:%S"),
+        "strategy"       : "power_law_ring_buffer",
+        "dataset"        : "ssc",
+        "training_file"  : "train_power_law_ring_buffer_ablation_ssc_snntorch.py",
+        "k"              : 32,
+        "gamma"          : gamma,
+        "epochs"         : 100,
+        "network_sizes"  : ["small", "medium", "large"],
+        "n_hidden_map"   : {"small": 64, "medium": 128, "large": 256},
+        "n_values"       : [5, 6, 7, 8],
+        "max_lag_map"    : {"5": 16, "6": 32, "7": 64, "8": 128},
+        "tap_rule"       : "t_i = round(max_lag * (i/(n-1))^gamma)",
+        "n_jobs"         : 12,
+    }
+    with open(os.path.join(version_dir, "ablation_config.json"), "w") as f:
+        json.dump(ablation_cfg, f, indent=2)
+print(f"Ablation v{version} initialised -> {version_dir}")
+PYEOF
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: failed to initialise version directory"
+        exit 1
+    fi
+    echo "Version directory ready."
+
+else
+    echo ""
+    echo "Job $IDX: waiting for version directory from job 1..."
+    WAIT=0
+    while [ $WAIT -lt 120 ]; do
+        VERSION_DIR=$(get_ablation_version_dir "$ABLATION_ROOT")
+        if [ -n "$VERSION_DIR" ]; then
+            echo "  Found: $VERSION_DIR"
+            break
+        fi
+        sleep 5
+        WAIT=$((WAIT + 5))
+    done
+    if [ -z "$VERSION_DIR" ]; then
+        echo "ERROR: version directory not found after 120s"
+        exit 1
+    fi
+fi
+
+VERSION_DIR=$(get_ablation_version_dir "$ABLATION_ROOT")
+
+if [ -z "$VERSION_DIR" ]; then
+    echo "ERROR: could not resolve VERSION_DIR for IDX=$IDX"
+    exit 1
+fi
+
+echo ""
+echo "  Ablation dir  : $VERSION_DIR"
+echo "  Run           : k32_n${NUM_TAPS}_lag${MAX_LAG}_g${GAMMA}_${NET_SIZE}"
+echo ""
+
+echo "Running probe check for n=$NUM_TAPS, max_lag=$MAX_LAG, gamma=$GAMMA, size=$NET_SIZE..."
+python3 - <<PYEOF
+import sys, torch
+sys.path.insert(0, ".")
+sys.path.insert(0, "models")
+from configs import get_config
+from power_law_tap_aad_snntorch import PowerLawTapAADNetSNNTorch
+
+NETWORK_SIZES = {"small": 64, "medium": 128, "large": 256}
+
+def make_power_law_taps(n, max_lag, gamma):
+    if n < 2:
+        raise ValueError("n must be >= 2, got {}".format(n))
+    if n > max_lag:
+        raise ValueError("Cannot place {} distinct taps in [1, {}]".format(n, max_lag))
+    if n == 2:
+        return [1, max_lag]
+    taps = [max(1, round(max_lag * ((i / (n - 1)) ** gamma))) for i in range(n)]
+    taps[0]  = 1
+    taps[-1] = max_lag
+    for i in range(1, len(taps) - 1):
+        if taps[i] <= taps[i - 1]:
+            taps[i] = taps[i - 1] + 1
+    for i in range(len(taps) - 2, 0, -1):
+        if taps[i] >= taps[i + 1]:
+            taps[i] = taps[i + 1] - 1
+    if len(set(taps)) != n:
+        raise ValueError("Could not resolve duplicate taps after repair: {}".format(taps))
+    return taps
+
+cfg                   = get_config("power_law_tap_snntorch")
+cfg.n_hidden          = NETWORK_SIZES["$NET_SIZE"]
+cfg.gamma             = $GAMMA
+cfg.buffer_max_lag    = $MAX_LAG
+cfg.buffer_size       = max(cfg.buffer_size, $MAX_LAG)
+cfg.n_inputs          = 700
+cfg.n_outputs         = 35
+cfg.time_steps        = 400
+cfg.taps              = make_power_law_taps($NUM_TAPS, $MAX_LAG, $GAMMA)
+cfg.n_taps            = len(cfg.taps)
+cfg.lr                = 0.001
+cfg.lr_milestones     = [50, 75]
+cfg.lr_gamma          = 0.1
+cfg.delay_init_cap    = max(4, $MAX_LAG // 2)
+cfg.delay_adapt_start = 10
+
+torch.manual_seed(42)
+model    = PowerLawTapAADNetSNNTorch(cfg)
+n_params = sum(p.numel() for p in model.parameters())
+x        = (torch.rand(2, cfg.time_steps, cfg.n_inputs) < 0.05).float()
+with torch.no_grad():
+    out = model(x)
+assert out.shape == (cfg.time_steps, 2, cfg.n_outputs), \
+    "Bad shape: {}".format(out.shape)
+buf_info = model.get_buffer_info()
+assert buf_info["storage"] == "ring",   "Not ring buffer"
+assert buf_info["taps"]    == cfg.taps, "Taps mismatch: {} != {}".format(buf_info["taps"], cfg.taps)
+print("  dataset       : SSC")
+print("  n_inputs      : {}".format(cfg.n_inputs))
+print("  n_outputs     : {}".format(cfg.n_outputs))
+print("  time_steps    : {}".format(cfg.time_steps))
+print("  n_hidden      : {}".format(cfg.n_hidden))
+print("  gamma         : {}".format(cfg.gamma))
+print("  n_taps        : {}".format(len(cfg.taps)))
+print("  taps          : {}".format(cfg.taps))
+print("  max_lag       : {}".format(cfg.buffer_max_lag))
+print("  lr            : {}".format(cfg.lr))
+print("  lr_milestones : {}".format(cfg.lr_milestones))
+print("  delay_init_cap: {}".format(cfg.delay_init_cap))
+print("  n_params      : {:,}".format(n_params))
+print("  out shape     : {}".format(tuple(out.shape)))
+print("  STATUS        : OK")
+PYEOF
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: probe check failed"
+    exit 1
+fi
+echo "Probe check passed."
+
+echo ""
+echo "Starting training: n=$NUM_TAPS, max_lag=$MAX_LAG, gamma=$GAMMA, size=$NET_SIZE, 100 epochs..."
+echo "============================================================"
+
+python3 training/train_power_law_ring_buffer_ablation_ssc_snntorch.py \
+    --epochs         100             \
+    --datasets-path  "$DATA"         \
+    --base-dir       "$VERSION_DIR"  \
+    --num-taps       "$NUM_TAPS"     \
+    --network-size   "$NET_SIZE"     \
+    --gamma          "$GAMMA"        \
+    --buffer-max-lag "$MAX_LAG"
+
+EXIT_CODE=$?
+
+RUN_NAME="k32_n${NUM_TAPS}_lag${MAX_LAG}_g${GAMMA}_${NET_SIZE}"
+
+echo ""
+echo "============================================================"
+echo "  End time      : $(date)"
+echo "  Exit code     : $EXIT_CODE"
+echo "  Run           : $RUN_NAME"
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "  Status        : SUCCESS"
+    RUN_DIR="${VERSION_DIR}/${RUN_NAME}"
+    python3 - <<PYEOF
+import json, glob, os
+run_dir   = "$RUN_DIR"
+summaries = glob.glob(os.path.join(run_dir, "*_summary.json"))
+if summaries:
+    with open(summaries[0]) as f:
+        s = json.load(f)
+    print("  Best acc      : {:.2f}%".format(s["best_acc"] * 100))
+    print("  n_params      : {:,}".format(s["n_params"]))
+    print("  n_taps        : {}".format(s["n_taps"]))
+    print("  taps          : {}".format(s["taps"]))
+    print("  max_lag       : {}".format(s["buffer_max_lag"]))
+    accs = s.get("test_accs", [])
+    if accs:
+        print("  Last 5 accs   : {}".format(
+            ["{:.2f}%".format(a * 100) for a in accs[-5:]]))
+    total_mins = s.get("total_train_time_seconds", 0) / 60
+    print("  Total time    : {:.1f} min".format(total_mins))
+else:
+    print("  WARNING: no summary found in {}".format(run_dir))
+PYEOF
+else
+    echo "  Status        : FAILED (exit code $EXIT_CODE)"
+fi
+
+echo "============================================================"
+echo ""
+echo "Job $IDX complete (n=$NUM_TAPS, gamma=$GAMMA, $NET_SIZE): $(date)"

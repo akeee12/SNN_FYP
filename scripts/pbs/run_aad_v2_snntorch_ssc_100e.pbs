@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N aadv2_snntorch_ssc
-#PBS -l walltime=13:00:00
+#PBS -l walltime=16:00:00
 #PBS -l select=1:ncpus=8:mem=8gb:ngpus=1:gpu_type=RTX6000
 #PBS -j oe
 #PBS -o /rds/general/user/ak2721/home/logs/aadv2_snntorch_ssc.log
