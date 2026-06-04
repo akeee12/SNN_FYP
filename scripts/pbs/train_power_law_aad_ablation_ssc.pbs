@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N pl_ring_ablation_ssc
-#PBS -l walltime=18:00:00
+#PBS -l walltime=24:00:00
 #PBS -l select=1:ncpus=5:mem=12gb:ngpus=1:gpu_type=RTX6000
 #PBS -j oe
 #PBS -J 1-12
