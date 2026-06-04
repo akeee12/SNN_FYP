@@ -167,9 +167,12 @@ class DCLSNet(nn.Module):
         """
         B, C, T = x.shape
 
-        # ── Input binning: 700 → 140 ──────────────────────────────────────
-        x = x.reshape(B, self.n_in, self.n_bins, T)
-        x = x.sum(dim=2).float()                    # (B, 140, T)
+        # FIXED — only bin if input is raw 700 channels
+        if x.shape[1] == self.n_bins * self.n_in:
+            x = x.reshape(B, self.n_in, self.n_bins, T)
+            x = x.sum(dim=2).float()
+        else:
+            x = x.float()
 
         # ── FC input projection ───────────────────────────────────────────
         x = self.fc_in(
