@@ -8,6 +8,11 @@ Supports three datasets via --dataset argument:
     ssc : Spiking Speech Commands    (700 inputs, 35 classes)
     dvs : DVS128 Gesture             (2048 inputs, 11 classes)
 
+Robustness sweep support:
+    --seed   : override cfg.seed for Monte Carlo runs
+    --run-id : human-readable label appended to results dir
+               e.g. --run-id seed_01 → results/power_law_tap_shd/seed_01/v1/
+
 All fixes from train_aadv2.py preserved:
     FIX 1 — DelayScheduler thea1/thea2 only ever increment
     FIX 2 — delay_sched.step() called once per epoch
@@ -92,10 +97,6 @@ class SHDDataset(Dataset):
 
 
 class SSCDataset(Dataset):
-    """
-    Spiking Speech Commands — same HDF5 structure as SHD.
-    700 input channels, 35 classes, max_time ~1.0s.
-    """
     def __init__(self, path, split="train",
                  time_steps=400, n_inputs=700, max_time=1.0):
         self.time_steps = time_steps
@@ -128,11 +129,6 @@ class SSCDataset(Dataset):
 
 
 class DVSGestureDataset(Dataset):
-    """
-    DVS128 Gesture — event-based camera dataset.
-    Downsampled to 32x32x2 = 2048 inputs.
-    11 classes, max_time ~3.7M microseconds.
-    """
     GRID  = 32
     N_POL = 2
 
@@ -323,7 +319,6 @@ class DelayScheduler:
         sorted1 = torch.sort(torch.floor(d1))[0]
         sorted2 = torch.sort(torch.floor(d2))[0]
 
-        # Dynamic p84 index — correct for any n_hidden
         p84_idx1 = max(0, int(0.84 * len(sorted1)) - 1)
         p84_idx2 = max(0, int(0.84 * len(sorted2)) - 1)
 
@@ -374,6 +369,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
     print(f"\n{'='*60}")
     print(f"  Model        : {cfg.model_name}")
     print(f"  Dataset      : {dataset_name.upper()}")
+    print(f"  Seed         : {cfg.seed}")
     print(f"  n_inputs     : {cfg.n_inputs}")
     print(f"  n_outputs    : {cfg.n_outputs}")
     print(f"  time_steps   : {cfg.time_steps}")
@@ -451,6 +447,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
     config_snapshot = {
         "model_name"        : cfg.model_name,
         "dataset"           : dataset_name,
+        "seed"              : cfg.seed,
         "n_inputs"          : cfg.n_inputs,
         "n_outputs"         : cfg.n_outputs,
         "time_steps"        : cfg.time_steps,
@@ -475,7 +472,6 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
         "delay_init_cap"    : cfg.delay_init_cap,
         "delay_adapt_start" : cfg.delay_adapt_start,
         "delay_adapt_window": cfg.delay_adapt_window,
-        "seed"              : cfg.seed,
     }
     with open(os.path.join(results_dir, "config.json"), "w") as f:
         json.dump(config_snapshot, f, indent=2)
@@ -545,6 +541,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
                 "epoch"      : epoch + 1,
                 "version"    : version,
                 "dataset"    : dataset_name,
+                "seed"       : cfg.seed,
                 "model_state": model.state_dict(),
                 "optimizer"  : optimizer.state_dict(),
                 "scheduler"  : scheduler.state_dict(),
@@ -556,7 +553,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
                             f"{cfg.model_name}_best.pt"))
 
         print(
-            f"  [v{version}][{dataset_name.upper()}]"
+            f"  [v{version}][{dataset_name.upper()}][seed={cfg.seed}]"
             f"[{epoch+1:4d}/{cfg.epochs}] "
             f"Loss: {avg_loss:.6f} | "
             f"Tr: {train_acc*100:.2f}% | "
@@ -582,6 +579,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
                 "epoch"      : epoch + 1,
                 "version"    : version,
                 "dataset"    : dataset_name,
+                "seed"       : cfg.seed,
                 "model_state": model.state_dict(),
                 "optimizer"  : optimizer.state_dict(),
                 "scheduler"  : scheduler.state_dict(),
@@ -597,6 +595,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
     summary = {
         "model_name"              : cfg.model_name,
         "dataset"                 : dataset_name,
+        "seed"                    : cfg.seed,
         "n_inputs"                : cfg.n_inputs,
         "n_outputs"               : cfg.n_outputs,
         "time_steps"              : cfg.time_steps,
@@ -632,6 +631,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
     print(f"\n{'='*60}")
     print(f"  Version        : v{version}")
     print(f"  Dataset        : {dataset_name.upper()}")
+    print(f"  Seed           : {cfg.seed}")
     print(f"  Strategy       : power_law  (ring buffer)")
     print(f"  Gamma          : {cfg.gamma}")
     print(f"  Taps           : {cfg.taps}")
@@ -665,6 +665,13 @@ def main():
     parser.add_argument("--dataset",        type=str,   default="shd",
                         choices=["shd", "ssc", "dvs"],
                         help="Dataset to train on (default: shd)")
+    # ── Robustness sweep arguments ────────────────────────────────────
+    parser.add_argument("--seed",    type=int, default=None,
+                        help="Override cfg.seed for Monte Carlo runs. "
+                             "Each unique seed gives an independent run.")
+    parser.add_argument("--run-id",  type=str, default=None,
+                        help="Human-readable label appended to base-dir. "
+                             "e.g. --run-id seed_01 → base_dir/seed_01/")
     args = parser.parse_args()
 
     cfg = get_config("power_law_tap_snntorch")
@@ -678,9 +685,23 @@ def main():
         cfg.gamma = args.gamma
         cfg.taps  = cfg._compute_power_law_taps()
 
-    base_dir = args.base_dir or os.path.join(
+    # ── Seed override — must come after all other cfg changes ─────────
+    # so set_seed() inside train() uses the overridden value
+    if args.seed is not None:
+        cfg.seed = args.seed
+
+    # ── Resolve base directory ────────────────────────────────────────
+    # If --run-id is given, nest results under base_dir/run_id/
+    # so each seed sweep run lands in its own subdirectory:
+    #   power_law_tap_shd/seed_01/v1/
+    #   power_law_tap_shd/seed_02/v1/
+    #   ...
+    default_base = os.path.join(
         cfg.results_dir, f"power_law_tap_{args.dataset}"
     )
+    base_dir = args.base_dir or default_base
+    if args.run_id is not None:
+        base_dir = os.path.join(base_dir, args.run_id)
 
     train(cfg, base_dir, dataset_name=args.dataset,
           resume_path=args.resume)
