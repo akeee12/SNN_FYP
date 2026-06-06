@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(ROOT, "models"))
 from configs import get_config
 from utils.seed import set_seed
 from experiments.results_logger import ResultsLogger
-from cadlif_model import cAdLIFNet
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
