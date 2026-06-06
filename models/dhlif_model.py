@@ -221,79 +221,42 @@ class DHLIFLayer(nn.Module):
                     if cfg.dropout_p > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, T, n_pre) — input spike trains
-        Returns:
-            spikes: (B, T, n_neurons)
-        """
         B, T, N_pre = x.shape
-        device      = x.device
+        device = x.device
 
-        # Timing factors via sigmoid (Equation 6)
-        # alpha: (n_neurons, n_branches)
-        # beta : (n_neurons,)
-        alpha = torch.sigmoid(self.alpha_hat)
-        beta  = torch.sigmoid(self.beta_hat)
+        alpha = torch.sigmoid(self.alpha_hat)   # (n_neurons, n_branches)
+        beta  = torch.sigmoid(self.beta_hat)    # (n_neurons,)
 
-        # Initialise states
-        # u: (B, n_neurons) — soma membrane potential
-        # i_d: (B, n_neurons, n_branches) — dendritic currents
-        u      = torch.zeros(B, self.n_neurons, device=device)
-        i_d    = torch.zeros(B, self.n_neurons,
-                             self.n_branches, device=device)
-        o_prev = torch.zeros(B, self.n_neurons, device=device)
-        spikes = torch.zeros(B, T, self.n_neurons, device=device)
+        # ── Build dense weight matrix via scatter (grad flows through self.W) ──
+        # W_full: (n_neurons, n_branches, n_pre)  — sparse, only chunk entries filled
+        W_full = torch.zeros(self.n_neurons, self.n_branches, self.n_pre,
+                            device=device, dtype=self.W.dtype)
+        W_full = W_full.scatter(2, self.indices, self.W)
+
+        # ── Precompute ALL branch inputs for ALL timesteps in one matmul ────────
+        # (B*T, n_pre) @ (n_pre, n_neurons*n_branches) → (B, T, n_neurons, n_branches)
+        W_mat  = W_full.view(self.n_neurons * self.n_branches, self.n_pre)
+        I_pre  = (x.reshape(B * T, N_pre) @ W_mat.T).view(B, T, self.n_neurons, self.n_branches)
+        # SSC: (128,400,256,4) = ~200 MB  ✓   DVS: (32,300,256,4) = ~37 MB  ✓
+
+        # ── Temporal loop — only small state tensors live here ──────────────────
+        u      = torch.zeros(B, self.n_neurons,                  device=device)
+        i_d    = torch.zeros(B, self.n_neurons, self.n_branches, device=device)
+        o_prev = torch.zeros(B, self.n_neurons,                  device=device)
+        spikes = torch.zeros(B, T, self.n_neurons,               device=device)
+
+        alpha_exp = alpha.unsqueeze(0)   # (1, n_neurons, n_branches)
+        beta_exp  = beta.unsqueeze(0)    # (1, n_neurons)
 
         for t in range(T):
-            # ── Compute dendritic input I_d for each branch ───────────────
-            # indices: (n_neurons, n_branches, chunk)
-            # x[:, t, :]: (B, n_pre)
-            # Gather: x_branch (B, n_neurons, n_branches, chunk)
-            x_t = x[:, t, :]                          # (B, n_pre)
-
-            # Expand x for gathering
-            # x_exp: (B, 1, 1, n_pre) → (B, n_neurons, n_branches, n_pre)
-            x_exp = x_t.unsqueeze(1).unsqueeze(1).expand(
-                B, self.n_neurons, self.n_branches, N_pre
-            )
-            # idx_exp: (1, n_neurons, n_branches, chunk)
-            idx_exp = self.indices.unsqueeze(0).expand(
-                B, -1, -1, -1
-            )
-            # Gather branch inputs: (B, n_neurons, n_branches, chunk)
-            x_branch = torch.gather(x_exp, dim=3, index=idx_exp)
-
-            # Weighted sum per branch: (B, n_neurons, n_branches)
-            # W: (n_neurons, n_branches, chunk)
-            I_d = (x_branch * self.W.unsqueeze(0)).sum(dim=3)
-
-            # ── Update dendritic currents (Equation 5, no reset) ──────────
-            # i_d[t+1] = alpha_d * i_d[t] + (1-alpha_d) * I_d[t+1]
-            # alpha: (n_neurons, n_branches) → (1, n_neurons, n_branches)
-            alpha_exp = alpha.unsqueeze(0)
-            i_d = alpha_exp * i_d + (1 - alpha_exp) * I_d
-
-            # ── Sum dendritic currents to soma ────────────────────────────
-            # sum_d i_d: (B, n_neurons)
+            I_d_t  = I_pre[:, t]                          # (B, n_neurons, n_branches) — view, no alloc
+            i_d    = alpha_exp * i_d + (1 - alpha_exp) * I_d_t
             i_soma = i_d.sum(dim=2)
-
-            # ── Update soma membrane potential (Equation 5) ───────────────
-            # u[t+1] = beta * u[t] + (1-beta) * i_soma - o[t]*u_th
-            # Soft reset: subtract u_th * o[t] (not hard reset to zero)
-            beta_exp = beta.unsqueeze(0)               # (1, n_neurons)
-            u = (beta_exp * u
-                 + (1 - beta_exp) * i_soma
-                 - o_prev * self.v_threshold)
-
-            # ── Spike generation (Equation 5) ─────────────────────────────
-            o = multi_gaussian_spike(
-                u, self.v_threshold,
-                self.gamma, self.h, self.sigma, self.s
-            )
-
-            spikes[:, t, :] = o
-            o_prev          = o     # no detach — BPTT flows through reset
+            u      = beta_exp * u + (1 - beta_exp) * i_soma - o_prev * self.v_threshold
+            o      = multi_gaussian_spike(u, self.v_threshold,
+                                        self.gamma, self.h, self.sigma, self.s)
+            spikes[:, t] = o
+            o_prev = o
 
         return self.drop(spikes)
 
