@@ -193,7 +193,7 @@ def plot_curves_by_size(runs, key, ylabel, size, output_path):
         print(f"  [SKIP] {size} {key} -- no data")
         return
 
-    n_epochs = max(len(r[key]) for r in valid)
+    n_epochs = min(50, max(len(r[key]) for r in valid))
     fig, ax  = plt.subplots(figsize=(9, 5))
 
     for r in valid:
