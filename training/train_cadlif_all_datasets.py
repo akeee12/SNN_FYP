@@ -190,7 +190,7 @@ def count_params_by_type(model):
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
-def train(cfg, base_dir, resume_path=None):
+def train(cfg, dataset_name, base_dir, resume_path=None):
 
     # ── Versioning ────────────────────────────────────────────────────────
     if resume_path and os.path.exists(resume_path):
@@ -523,7 +523,7 @@ def main():
         cfg.results_dir, "cadlif"
     )
 
-    train(cfg, base_dir, resume_path=args.resume)
+    train(cfg, args.dataset, base_dir, resume_path=args.resume)
 
 
 if __name__ == "__main__":
