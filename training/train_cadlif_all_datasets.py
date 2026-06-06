@@ -244,7 +244,7 @@ def train(cfg, base_dir, resume_path=None):
 
     # ── Data ──────────────────────────────────────────────────────────────
     print("  Loading datasets...")
-    train_loader, test_loader = get_loaders(cfg)
+    train_loader, test_loader = get_loaders(cfg, dataset_name)
     print()
 
     # ── Loss ──────────────────────────────────────────────────────────────
