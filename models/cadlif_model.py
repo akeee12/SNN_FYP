@@ -76,23 +76,12 @@ class SynapticDelayLayer(nn.Module):
     """
     Learnable per-synapse synaptic delays.
 
-    Each synapse (i,j) has its own delay d_ij in [0, max_delay].
-    Delays initialised to zero (Section 4.2).
+    Returns the weighted delayed sum I directly — shape (B, T, n_post) —
+    rather than the full (B, T, n_post, n_pre) intermediate, which OOMs
+    for large (n_post, n_pre) on SSC / DVS.
 
-    Delay gradient:
-        Approximated via linear interpolation between floor and ceil
-        delays using torch.gather. This implicitly computes a valid
-        gradient w.r.t. the real-valued delay parameter d_ij,
-        approximating Equation 9.
-
-    Padding:
-        Internal left-pad of max_delay zeros on the time axis only.
-        Dataset does NOT right-pad.
-
-    Args:
-        n_pre     : number of presynaptic neurons
-        n_post    : number of postsynaptic neurons
-        max_delay : maximum delay in timesteps (paper: 25)
+    The delay gradient still flows via linear interpolation between
+    floor/ceil delays through the alpha interpolation weight.
     """
 
     def __init__(self, n_pre: int, n_post: int, max_delay: int = 25):
@@ -100,48 +89,60 @@ class SynapticDelayLayer(nn.Module):
         self.n_pre     = n_pre
         self.n_post    = n_post
         self.max_delay = max_delay
+        self.delay     = nn.Parameter(torch.zeros(n_post, n_pre))
 
-        # Per-synapse delay — initialised to 0 (Section 4.2)
-        self.delay = nn.Parameter(torch.zeros(n_post, n_pre))
-
-    def forward(self, spikes: torch.Tensor) -> torch.Tensor:
+    def forward(self, spikes: torch.Tensor,
+                weight: torch.Tensor,
+                bias:   torch.Tensor = None) -> torch.Tensor:
         """
         Args:
-            spikes: (B, T, n_pre)
+            spikes : (B, T, n_pre)
+            weight : (n_post, n_pre)   — fc.weight passed in from cAdLIFNet
+            bias   : (n_post,)         — fc.bias  passed in from cAdLIFNet
         Returns:
-            delayed: (B, T, n_post, n_pre)
+            I : (B, T, n_post)         — weighted delayed synaptic input
         """
         B, T, N_pre = spikes.shape
+        device      = spikes.device
 
         d       = self.delay.clamp(0, self.max_delay)
-        d_floor = d.floor().long()
-        d_ceil  = d.ceil().long()
-        alpha   = (d - d.floor())                        # (n_post, n_pre)
+        d_floor = d.floor().long()          # (n_post, n_pre)
+        d_ceil  = d.ceil().long()           # (n_post, n_pre)
+        alpha   = d - d.floor()             # (n_post, n_pre) — grad flows here
 
-        # Left-pad time axis
+        # Effective weights for floor / ceil interpolation
+        Wf = weight * (1 - alpha)           # (n_post, n_pre)
+        Wc = weight * alpha                 # (n_post, n_pre)
+
+        # Left-pad time axis — (B, max_delay+T, n_pre)
         pad    = torch.zeros(B, self.max_delay, N_pre,
-                             device=spikes.device, dtype=spikes.dtype)
-        padded = torch.cat([pad, spikes], dim=1)         # (B, max_d+T, n_pre)
+                             device=device, dtype=spikes.dtype)
+        padded = torch.cat([pad, spikes], dim=1)
 
-        # Expand for per-synapse gather
-        padded_exp = padded.unsqueeze(2).expand(
-            B, self.max_delay + T, self.n_post, N_pre
-        )
+        # Accumulate weighted delayed inputs without ever building
+        # the (B, T, n_post, n_pre) tensor
+        # Peak memory: (B, T, n_pre) slice + (B, T, n_post) accumulator
+        I = torch.zeros(B, T, self.n_post,
+                        device=device, dtype=spikes.dtype)
 
-        # Build gather indices (B, T, n_post, n_pre)
-        t_base  = torch.arange(T, device=spikes.device).view(1, T, 1, 1)
-        start_f = (self.max_delay - d_floor).clamp(0).unsqueeze(0).unsqueeze(0)
-        start_c = (self.max_delay - d_ceil ).clamp(0).unsqueeze(0).unsqueeze(0)
+        for k in range(self.max_delay + 1):
+            # x_k[b, t, j] = spikes[b, t-k, j]  (zero-padded for t<k)
+            x_k = padded[:, self.max_delay - k:
+                             self.max_delay - k + T, :]   # (B, T, n_pre)
+            x_k_2d = x_k.reshape(B * T, N_pre)            # (B*T, n_pre)
 
-        idx_f = (t_base + start_f).expand(B, T, self.n_post, N_pre)
-        idx_c = (t_base + start_c).expand(B, T, self.n_post, N_pre)
+            # Floor contribution — synapses whose floor delay == k
+            Wf_k = Wf * (d_floor == k).float()            # (n_post, n_pre)
+            I = I + (x_k_2d @ Wf_k.T).view(B, T, self.n_post)
 
-        out_f = torch.gather(padded_exp, dim=1, index=idx_f)
-        out_c = torch.gather(padded_exp, dim=1, index=idx_c)
+            # Ceil contribution — synapses whose ceil delay == k
+            Wc_k = Wc * (d_ceil == k).float()
+            I = I + (x_k_2d @ Wc_k.T).view(B, T, self.n_post)
 
-        alpha_exp = alpha.unsqueeze(0).unsqueeze(0)      # (1,1,n_post,n_pre)
+        if bias is not None:
+            I = I + bias.unsqueeze(0).unsqueeze(0)
 
-        return (1 - alpha_exp) * out_f + alpha_exp * out_c
+        return I
 
     def get_stats(self) -> dict:
         d = self.delay.detach().cpu()
@@ -328,43 +329,25 @@ class cAdLIFNet(nn.Module):
             nn.init.zeros_(m.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, T, n_inputs) — no right-padding needed
-        Returns:
-            logits: (B, n_outputs) — log_softmax, ready for NLLLoss
-        """
-        # ── Layer 1 ───────────────────────────────────────────────────────
-        delayed1 = self.delay1(x)                        # (B,T,n_hid,n_in)
+            """
+            Args:
+                x: (B, T, n_inputs)
+            Returns:
+                logits: (B, n_outputs) — log_softmax for NLLLoss
+            """
+            # ── Layer 1 ───────────────────────────────────────────────────────
+            # Pass fc1 weight+bias into delay layer — returns (B, T, n_hidden)
+            I1 = self.delay1(x,  self.fc1.weight, self.fc1.bias)
+            s1 = self.drop1(self.lif1(I1))
 
-        # Equation 7: I_i = sum_j W_ij * s_j[t-d_ij] + b_i
-        w1 = self.fc1.weight                             # (n_hidden, n_inputs)
-        I1 = (delayed1 * w1.unsqueeze(0).unsqueeze(0)
-              ).sum(-1) \
-             + self.fc1.bias.unsqueeze(0).unsqueeze(0)   # (B, T, n_hidden)
+            # ── Layer 2 ───────────────────────────────────────────────────────
+            I2 = self.delay2(s1, self.fc2.weight, self.fc2.bias)
+            s2 = self.drop2(self.lif2(I2))
 
-        s1 = self.drop1(self.lif1(I1))                  # (B, T, n_hidden)
-
-        # ── Layer 2 ───────────────────────────────────────────────────────
-        delayed2 = self.delay2(s1)                       # (B,T,n_hid,n_hid)
-
-        w2 = self.fc2.weight                             # (n_hidden, n_hidden)
-        I2 = (delayed2 * w2.unsqueeze(0).unsqueeze(0)
-              ).sum(-1) \
-             + self.fc2.bias.unsqueeze(0).unsqueeze(0)   # (B, T, n_hidden)
-
-        s2 = self.drop2(self.lif2(I2))                  # (B, T, n_hidden)
-
-        # ── Readout — Equations 3 + 4 ─────────────────────────────────────
-        u_out = self.fc_out(s2)                          # (B, T, n_outputs)
-
-        # Step 1: sum softmax probabilities over T (Equation 3)
-        probs = F.softmax(u_out, dim=-1).sum(dim=1)      # (B, n_outputs)
-
-        # Step 2: renormalise over classes for valid log-probability
-        logits = F.log_softmax(probs, dim=-1)            # (B, n_outputs)
-
-        return logits
+            # ── Readout — Equations 3 + 4 ─────────────────────────────────────
+            u_out  = self.fc_out(s2)
+            probs  = F.softmax(u_out, dim=-1).sum(dim=1)
+            return F.log_softmax(probs, dim=-1)
 
     def clamp_all(self):
         """Call after every optimiser step."""
