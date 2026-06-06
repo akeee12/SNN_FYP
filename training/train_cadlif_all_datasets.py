@@ -508,6 +508,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Train cAdLIF (d-cAdLIF) on SHD"
     )
+    parser = argparse.ArgumentParser(
+        description="Train cAdLIF (d-cAdLIF) on SHD / SSC / DVS Gesture"
+    )
+    parser.add_argument("--dataset",       type=str, default="shd",
+                        choices=["shd", "ssc", "dvs"],
+                        help="Dataset to train on (default: shd)")
     parser.add_argument("--epochs",        type=int, default=None)
     parser.add_argument("--base-dir",      type=str, default=None)
     parser.add_argument("--datasets-path", type=str, default=None)
