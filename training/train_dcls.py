@@ -275,6 +275,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
     print(f"  n_inputs   : {cfg.n_inputs}")
     print(f"  n_outputs  : {cfg.n_outputs}")
     print(f"  time_steps : {cfg.time_steps}")
+    print(f"  n_hidden   : {cfg.n_hidden_neurons}")
     print(f"  Version    : v{version}")
     print(f"  Results    : {results_dir}")
     print(f"  Epochs     : {cfg.epochs}")
@@ -338,21 +339,22 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
 
     # ── Config snapshot ───────────────────────────────────────────────
     config_snapshot = {
-        "model_name" : cfg.model_name,
-        "dataset"    : dataset_name,
-        "n_inputs"   : cfg.n_inputs,
-        "n_outputs"  : cfg.n_outputs,
-        "time_steps" : cfg.time_steps,
-        "version"    : version,
-        "lr_w"       : cfg.lr_w,
-        "lr_pos"     : cfg.lr_pos,
-        "weight_decay": cfg.weight_decay,
-        "dropout_p"  : cfg.dropout_p,
-        "batch_size" : cfg.batch_size,
-        "epochs"     : cfg.epochs,
-        "max_delay"  : cfg.max_delay,
-        "v_threshold": cfg.v_threshold,
-        "seed"       : cfg.seed,
+        "model_name"    : cfg.model_name,
+        "dataset"       : dataset_name,
+        "n_inputs"      : cfg.n_inputs,
+        "n_outputs"     : cfg.n_outputs,
+        "n_hidden"      : cfg.n_hidden_neurons,
+        "time_steps"    : cfg.time_steps,
+        "version"       : version,
+        "lr_w"          : cfg.lr_w,
+        "lr_pos"        : cfg.lr_pos,
+        "weight_decay"  : cfg.weight_decay,
+        "dropout_p"     : cfg.dropout_p,
+        "batch_size"    : cfg.batch_size,
+        "epochs"        : cfg.epochs,
+        "max_delay"     : cfg.max_delay,
+        "v_threshold"   : cfg.v_threshold,
+        "seed"          : cfg.seed,
     }
     with open(os.path.join(results_dir, "config.json"), "w") as f:
         json.dump(config_snapshot, f, indent=2)
@@ -471,6 +473,7 @@ def train(cfg, base_dir, dataset_name: str, resume_path=None):
         "dataset"                 : dataset_name,
         "n_inputs"                : cfg.n_inputs,
         "n_outputs"               : cfg.n_outputs,
+        "n_hidden"                : cfg.n_hidden_neurons,
         "time_steps"              : cfg.time_steps,
         "version"                 : version,
         "best_acc"                : float(best_acc),
@@ -512,6 +515,8 @@ def main():
     parser.add_argument("--epochs",        type=int, default=None)
     parser.add_argument("--base-dir",      type=str, default=None)
     parser.add_argument("--datasets-path", type=str, default=None)
+    parser.add_argument("--n-hidden",      type=int, default=None,
+                        help="Override n_hidden_neurons")
     parser.add_argument("--resume",        type=str, default=None)
     parser.add_argument("--dataset",       type=str, default="shd",
                         choices=["shd", "ssc", "dvs"],
@@ -519,8 +524,9 @@ def main():
     args = parser.parse_args()
 
     cfg = get_config("dcls")
-    if args.epochs        is not None: cfg.epochs        = args.epochs
-    if args.datasets_path is not None: cfg.datasets_path = args.datasets_path
+    if args.epochs        is not None: cfg.epochs           = args.epochs
+    if args.datasets_path is not None: cfg.datasets_path    = args.datasets_path
+    if args.n_hidden      is not None: cfg.n_hidden_neurons = args.n_hidden
 
     base_dir = args.base_dir or os.path.join(
         cfg.results_dir, f"dcls_{args.dataset}")
