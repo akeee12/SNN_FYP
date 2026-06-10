@@ -2,10 +2,8 @@
 Benchmark scatter plot — SSC dataset.
 Parameters (x, linear scale) vs best test accuracy (y).
 
-All data hardcoded from PBS logs and summary JSONs as of 07/06/2026.
-
-Note: CaDLIF and DHLIF hit walltime before completing any epochs on SSC.
-They are included in the table with params only, excluded from scatter.
+Note: CaDLIF and DHLIF hit walltime before completing any epochs.
+They appear in the table only (no accuracy data for scatter).
 
 Outputs:
     plots/ssc/benchmark_scatter.png
@@ -13,8 +11,6 @@ Outputs:
 """
 
 import os
-import json
-import csv
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -26,56 +22,37 @@ from matplotlib.patches import Patch
 BASE_RESULTS = "/rds/general/user/ak2721/home/results/SNN_FYP"
 OUTPUT_DIR   = os.path.join(BASE_RESULTS, "plots", "ssc")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HARDCODED DATA — from PBS logs and summary JSONs
-# (label, n_params, best_acc, top5, top10, avg_mem, avg_time, group,
-#  marker, color, has_acc)
-# has_acc=False → exclude from scatter, include in table only
-# ─────────────────────────────────────────────────────────────────────────────
-
 MODELS = [
-    # ── Benchmark models ──────────────────────────────────────────────
-    dict(label="AAD SNNTorch",   n_params=111_011,  best_acc=60.81,
+    dict(label="AAD SNNTorch",            n_params=111_011,  best_acc=60.81,
          top5=60.44,  top10=60.27, avg_mem=548.2,  avg_time=830.7,
-         group="benchmark", marker="o", color="#2166ac", has_acc=True,
-         rel_path="aad_v2_ssc_500e/v2/training_log.csv"),
-    dict(label="Event SSM",      n_params=294_307,  best_acc=76.62,
+         group="benchmark", marker="o", color="#2166ac", has_acc=True),
+    dict(label="Event SSM",               n_params=294_307,  best_acc=76.62,
          top5=76.25,  top10=76.10, avg_mem=234.5,  avg_time=1694.5,
-         group="benchmark", marker="o", color="#e08214", has_acc=True,
-         rel_path="event_ssm_ssc/v1/training_log.csv"),
-    dict(label="DCLS + buffer",  n_params=482_979,  best_acc=76.30,
+         group="benchmark", marker="o", color="#e08214", has_acc=True),
+    dict(label="DCLS + buffer",           n_params=482_979,  best_acc=76.30,
          top5=76.15,  top10=76.09, avg_mem=1813.7, avg_time=109.4,
-         group="benchmark", marker="o", color="#4dac26", has_acc=True,
-         rel_path="dcls_power_law_ring_buffer_ssc/v1/DCLSPowerLawRingBuffer_summary.json"),
-    dict(label="CaDLIF",         n_params=501_027,  best_acc=None,
+         group="benchmark", marker="o", color="#4dac26", has_acc=True),
+    dict(label="CaDLIF",                  n_params=501_027,  best_acc=None,
          top5=None,   top10=None,  avg_mem=2950.8, avg_time=1000.1,
-         group="benchmark", marker="o", color="#d6604d", has_acc=False,
-         rel_path=None),
-    dict(label="DHLIF",          n_params=323_107,  best_acc=None,
+         group="benchmark", marker="o", color="#d6604d", has_acc=False),
+    dict(label="DHLIF",                   n_params=323_107,  best_acc=None,
          top5=None,   top10=None,  avg_mem=2416.6, avg_time=2442.1,
-         group="benchmark", marker="o", color="#8073ac", has_acc=False,
-         rel_path=None),
-    # ── Buffer strategies ─────────────────────────────────────────────
+         group="benchmark", marker="o", color="#8073ac", has_acc=False),
     dict(label="Power-law buffer (\u03b3=2)", n_params=72_515, best_acc=66.05,
          top5=65.92,  top10=65.68, avg_mem=636.5,  avg_time=1083.9,
-         group="buffer", marker="*", color="#555555", has_acc=True,
-         rel_path="power_law_tap_ssc/v2/training_log.csv"),
-    dict(label="Exponential buffer",          n_params=72_515, best_acc=65.74,
+         group="buffer", marker="*", color="#555555", has_acc=True),
+    dict(label="Exponential buffer",      n_params=72_515,  best_acc=65.74,
          top5=65.64,  top10=65.53, avg_mem=636.5,  avg_time=1048.3,
-         group="buffer", marker="^", color="#555555", has_acc=True,
-         rel_path="exponential_tap_ssc/v3/training_log.csv"),
-    dict(label="Log buffer",                  n_params=72_515, best_acc=65.80,
+         group="buffer", marker="^", color="#555555", has_acc=True),
+    dict(label="Log buffer",              n_params=72_515,  best_acc=65.80,
          top5=65.44,  top10=65.21, avg_mem=636.5,  avg_time=1089.5,
-         group="buffer", marker="D", color="#555555", has_acc=True,
-         rel_path="log_ring_buffer_ssc/v2/training_log.csv"),
-    dict(label="Linear buffer",               n_params=72_515, best_acc=65.17,
+         group="buffer", marker="D", color="#555555", has_acc=True),
+    dict(label="Linear buffer",           n_params=72_515,  best_acc=65.17,
          top5=64.98,  top10=64.82, avg_mem=636.5,  avg_time=1083.6,
-         group="buffer", marker="s", color="#555555", has_acc=True,
-         rel_path="linear_tap_ssc/v2/training_log.csv"),
-    dict(label="Random buffer",               n_params=72_515, best_acc=64.09,
+         group="buffer", marker="s", color="#555555", has_acc=True),
+    dict(label="Random buffer",           n_params=72_515,  best_acc=64.09,
          top5=63.90,  top10=63.69, avg_mem=636.5,  avg_time=1086.2,
-         group="buffer", marker="P", color="#555555", has_acc=True,
-         rel_path="random_tap_ssc/v2/training_log.csv"),
+         group="buffer", marker="P", color="#555555", has_acc=True),
 ]
 
 
@@ -105,7 +82,7 @@ def plot_scatter(output_path):
 
     for m in MODELS:
         if not m["has_acc"]:
-            continue  # skip from scatter — no accuracy data
+            continue
 
         is_bm       = m["group"] == "benchmark"
         is_best_buf = m["label"] == best_buf_label
@@ -147,9 +124,8 @@ def plot_scatter(output_path):
     ax.set_xlabel("Number of Parameters", fontsize=12)
     ax.set_ylabel("Best Test Accuracy (%)", fontsize=12)
     ax.set_title(
-        "Comparison of Algorithm Performance on SSC Dataset\n"
-        "(CaDLIF and DHLIF excluded — hit walltime before training)",
-        fontsize=11, pad=10,
+        "Comparison of Algorithm Performance on SSC Dataset",
+        fontsize=12, pad=10,
     )
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}")
@@ -199,13 +175,12 @@ def plot_table(output_path):
         best_str  = f"{m['best_acc']:.2f}%" if m["best_acc"] is not None else "—"
         top5_str  = f"{m['top5']:.2f}%"     if m["top5"]     is not None else "—"
         top10_str = f"{m['top10']:.2f}%"    if m["top10"]    is not None else "—"
-        note      = "" if m["has_acc"] else " (walltime)"
 
         rows_raw.append((
             m["best_acc"] if m["best_acc"] is not None else -1,
             m["color"], m["label"], m["group"], [
                 "",
-                m["label"] + note,
+                m["label"],
                 m["group"].capitalize(),
                 f"{m['n_params']:,}",
                 best_str,
@@ -245,14 +220,14 @@ def plot_table(output_path):
 
     for i, (_, color, label, group, _) in enumerate(rows_raw):
         row_idx = i + 1
-        m_data  = next(m for m in MODELS if m["label"] == label.replace(" (walltime)", ""))
+        m_data  = next(m for m in MODELS if m["label"] == label)
 
         if i == 0 and m_data["has_acc"]:
             fc = "#fff3b0"
-        elif label.replace(" (walltime)", "") == best_buf_label:
+        elif label == best_buf_label:
             fc = "#ffe0e0"
         elif not m_data["has_acc"]:
-            fc = "#f0f0f0"   # grey for no-data rows
+            fc = "#f0f0f0"
         else:
             fc = "#f5f5f5" if i % 2 == 0 else "white"
 
@@ -267,7 +242,7 @@ def plot_table(output_path):
         "Benchmark Comparison — SSC  |  "
         "Sorted by best test accuracy  |  "
         "Gold = overall best  |  Pink = best buffer  |  "
-        "Grey = no accuracy data (hit walltime)  |  "
+        "Grey = no accuracy data  |  "
         "Top-5/10 avg = mean of 5/10 highest epoch accuracies",
         fontsize=10, pad=14,
     )
