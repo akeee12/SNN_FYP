@@ -43,7 +43,7 @@ MODELS = [
          top5=76.25,  top10=76.10, avg_mem=234.5,  avg_time=1694.5,
          group="benchmark", marker="o", color="#e08214", has_acc=True,
          rel_path="event_ssm_ssc/v1/training_log.csv"),
-    dict(label="DCLS + buffer",  n_params=482_979,  best_acc=76.30,
+    dict(label="DCLS",  n_params=482_979,  best_acc=76.30,
          top5=76.15,  top10=76.09, avg_mem=1813.7, avg_time=109.4,
          group="benchmark", marker="o", color="#4dac26", has_acc=True,
          rel_path="dcls_power_law_ring_buffer_ssc/v1/DCLSPowerLawRingBuffer_summary.json"),
