@@ -2,9 +2,6 @@
 Benchmark scatter plot — SSC dataset.
 Parameters (x, linear scale) vs best test accuracy (y).
 
-Note: CaDLIF and DHLIF hit walltime before completing any epochs.
-They appear in the table only (no accuracy data for scatter).
-
 Outputs:
     plots/ssc/benchmark_scatter.png
     plots/ssc/benchmark_scatter_table.png
@@ -32,12 +29,12 @@ MODELS = [
     dict(label="DCLS + buffer",           n_params=482_979,  best_acc=76.30,
          top5=76.15,  top10=76.09, avg_mem=1813.7, avg_time=109.4,
          group="benchmark", marker="o", color="#4dac26", has_acc=True),
-    dict(label="CaDLIF",                  n_params=501_027,  best_acc=None,
-         top5=None,   top10=None,  avg_mem=2950.8, avg_time=1000.1,
-         group="benchmark", marker="o", color="#d6604d", has_acc=False),
-    dict(label="DHLIF",                   n_params=323_107,  best_acc=None,
-         top5=None,   top10=None,  avg_mem=2416.6, avg_time=2442.1,
-         group="benchmark", marker="o", color="#8073ac", has_acc=False),
+    dict(label="CaDLIF",                  n_params=501_027,  best_acc=74.07,
+         top5=73.90,  top10=None,  avg_mem=2950.8, avg_time=1000.1,
+         group="benchmark", marker="o", color="#d6604d", has_acc=True),
+    dict(label="DHLIF",                   n_params=323_107,  best_acc=70.67,
+         top5=70.31,  top10=None,  avg_mem=2416.6, avg_time=2442.1,
+         group="benchmark", marker="o", color="#8073ac", has_acc=True),
     dict(label="Power-law buffer (\u03b3=2)", n_params=72_515, best_acc=66.05,
          top5=65.92,  top10=65.68, avg_mem=636.5,  avg_time=1083.9,
          group="buffer", marker="*", color="#555555", has_acc=True),
@@ -124,7 +121,7 @@ def plot_scatter(output_path):
     ax.set_xlabel("Number of Parameters", fontsize=12)
     ax.set_ylabel("Best Test Accuracy (%)", fontsize=12)
     ax.set_title(
-        "Comparison of Algorithm Performance on SSC Dataset",
+        "Comparison of Algorithms on SSC Dataset",
         fontsize=12, pad=10,
     )
     ax.xaxis.set_major_formatter(
@@ -242,8 +239,8 @@ def plot_table(output_path):
         "Benchmark Comparison — SSC  |  "
         "Sorted by best test accuracy  |  "
         "Gold = overall best  |  Pink = best buffer  |  "
-        "Grey = no accuracy data  |  "
-        "Top-5/10 avg = mean of 5/10 highest epoch accuracies",
+        "Top-5/10 avg = mean of 5/10 highest epoch accuracies  |  "
+        "— = insufficient epochs for top-10 avg",
         fontsize=10, pad=14,
     )
     fig.tight_layout()
