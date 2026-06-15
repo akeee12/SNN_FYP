@@ -56,15 +56,13 @@ def load_model(checkpoint_path: str):
 
     model = PowerLawTapAADNetSNNTorch(cfg)
 
-    # strict=False skips _ring size mismatch — ring is reset before every
-    # inference pass so the saved batch-sized state is irrelevant
-    missing, unexpected = model.load_state_dict(ckpt["model_state"], strict=False)
-    skipped = [k for k in missing + unexpected if "_ring" in k]
-    other   = [k for k in missing + unexpected if "_ring" not in k]
-    if skipped:
-        print(f"  [INFO] Skipped ring buffer (batch dim mismatch — expected): {skipped}")
-    if other:
-        print(f"  [WARNING] Unexpected missing/extra keys: {other}")
+    sd = ckpt["model_state"]
+    for k in [k for k in list(sd.keys()) if "_ring" in k]:
+        print(f"  [INFO] Removing from state dict: {k}  {sd[k].shape}")
+        del sd[k]
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing:    print(f"  [INFO] Missing keys  : {missing}")
+    if unexpected: print(f"  [WARNING] Unexpected : {unexpected}")
 
     model.eval()
 
