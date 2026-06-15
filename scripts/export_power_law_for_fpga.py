@@ -218,7 +218,7 @@ def verify_quantisation(weights: dict, quantised: dict,
                 module.weight.copy_(w_t)
         elif hasattr(module, "weight_v"):
             with torch.no_grad():
-                norm = w_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+                norm = w_t.norm(dim=1, keepdim=True).clamp(min=1e-8)
                 module.weight_v.data.copy_(w_t / norm)
                 module.weight_g.data.copy_(norm)
         else:
