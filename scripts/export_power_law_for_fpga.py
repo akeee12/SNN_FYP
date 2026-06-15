@@ -29,7 +29,7 @@ from power_law_tap_aad_snntorch import PowerLawTapAADNetSNNTorch
 
 CHECKPOINT = (
     "/rds/general/user/ak2721/home/results/SNN_FYP"
-    "/power_law_tap_shd/v1/PowerLawTapAADSNNTorch_best.pt"
+    "/power_law_tap_shd/seed_XX/v1/PowerLawTapAADSNNTorch_best.pt"
 )
 OUTPUT_DIR = "/rds/general/user/ak2721/home/fpga_export/power_law"
 BITS       = 8
