@@ -44,12 +44,11 @@ def load_model(checkpoint_path: str):
 
     ckpt = torch.load(checkpoint_path, map_location="cpu")
 
-    # Hardcoded from state dict inspection — checkpoint does not store these
-    cfg.taps           = [1, 4, 14, 32, 57, 89, 128]
-    cfg.buffer_max_lag = 128
-    cfg.n_hidden       = 128
+    cfg.taps           = [1, 4, 16, 36, 64]
+    cfg.buffer_max_lag = 64
+    cfg.n_hidden       = 64
     cfg.gamma          = 2.0
-    cfg.n_taps         = 7
+    cfg.n_taps         = 5
     cfg.buffer_size    = 32
     cfg.n_inputs       = 700
     cfg.n_outputs      = 20
