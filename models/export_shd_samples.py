@@ -21,7 +21,7 @@ sys.path.insert(0, ROOT)
 # CONFIGURATION — change these lines only
 # ─────────────────────────────────────────────────────────────────────────────
 
-DATASETS_PATH = "/rds/general/user/ak2721/home/SNN_FYP/data"  # <-- confirm/edit
+DATASETS_PATH = "/rds/general/user/ak2721/home/datasets/SHD"
 SPLIT         = "test"
 TIME_STEPS    = 400      # cfg.time_steps, confirmed from aad_v2_snntorch_config.py
 N_INPUTS      = 700
